@@ -140,11 +140,16 @@ section[hidden]{display:none}
     <label>Search<input id="q" type="text" placeholder="ZEC, SOL…" spellcheck="false"></label>
     <label>Min TVL ($)<input id="minTvl" type="number" value="0" step="25000"></label>
     <label>Fee window<select id="tf">
-      <option value="m5">5 minutes</option>
-      <option value="h1">1 hour</option>
-      <option value="h6">6 hours</option>
-      <option value="h24" selected>24 hours</option>
-      <option value="d7">7 days</option>
+      <option value="5m">5 minutes</option>
+      <option value="15m">15 minutes</option>
+      <option value="30m">30 minutes</option>
+      <option value="1h">1 hour</option>
+      <option value="2h">2 hours</option>
+      <option value="4h">4 hours</option>
+      <option value="8h">8 hours</option>
+      <option value="24h" selected>24 hours</option>
+      <option value="7d">7 days</option>
+      <option value="30d">30 days</option>
     </select></label>
     <label>Hold for<select id="hold"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
     <label>Pairs<select id="kind">
@@ -175,14 +180,15 @@ section[hidden]{display:none}
     <th data-k="ageDays">Age</th>
   </tr></thead><tbody id="rows"></tbody></table></div>
 
-  <p class="foot"><b>Fee window</b> picks how recently the fee income is measured. The 5-minute, 1-hour and 6-hour windows come from DexScreener and are the only short windows either source publishes — there is no 4-hour or 12-hour figure to read. Short windows surface pools that only started trading today, but a few minutes of fees is noisy, so check a longer window before acting. <b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it. That's the number that decides whether a pool is worth your money. <b>Edge</b> is the ratio of those two — a safety margin, not a return. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
+  <p class="foot"><b>Fee window</b> picks how recently the fee income is measured, using Orca's own figures for each period — the same ten windows its own interface offers. Short windows surface pools that only started trading today, but five minutes of fees extrapolated to a daily rate is extremely noisy, so confirm on 24 hours or 7 days before acting. <b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it. That's the number that decides whether a pool is worth your money. <b>Edge</b> is the ratio of those two — a safety margin, not a return. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
 
   <details>
     <summary>Why ranking works this way, and how new pools are spotted</summary>
     <p><b>Edge alone was misleading.</b> It's a ratio, so a sleepy pool with almost no fees and almost no volatility can score 36× while earning $0.51 a day per $1,000. A busy pool scoring 3× earns $2.41. Ranking uses net yield per day, with edge kept as a second column so you can still see how much headroom a pool has before fees stop covering the movement.</p>
     <p><b>Reading them together:</b> high net and edge above 1.5 is the sweet spot. High net with edge near 1 means the pool pays well but has no margin for error — a quiet week kills it. High edge with low net is safe and not worth the effort.</p>
     <p><b>New pools</b> are found from the pool's own 7-day price history. Orca returns 14 slots covering a week, and a pool younger than that has empty leading slots, which gives its age to within half a day. The scanner also remembers every pool address it has seen before in this browser, so anything appearing for the first time is marked even if it's older than a week. Star a pool to keep it on your watchlist.</p>
-    <p><b>Short windows are noisy on purpose.</b> A 5-minute window extrapolates five minutes of fees into a daily rate, so a single large swap can make a pool look like it yields hundreds of percent. Rows showing fewer than ten trades in the chosen window are tagged with the trade count. Use the short windows to notice a pool, then switch to 24 hours or 7 days before believing the number.</p>
+    <p><b>Short windows are noisy on purpose.</b> A 5-minute window extrapolates five minutes of fees into a daily rate, so a single large swap can make a pool look like it yields hundreds of percent. Use the short windows to notice a pool, then switch to 24 hours or 7 days before believing the number. A row tagged <b>24h data</b> means Orca didn't return the chosen window for that pool, so the 24-hour figure stands in.</p>
+    <p><b>Why a figure here can differ from Orca's own.</b> Orca's position screen quotes the yield for the exact range you've drawn; this table quotes it for the suggested range, which is usually much wider, so the number here is lower. Both also price liquidity in the pool's quote token — for a pool quoted in SOL rather than a stablecoin, that has to be converted to dollars before fees and costs can be compared. Pools where the liquidity figure can't be reconciled fall back to a TVL-based estimate, which the detail panel states.</p>
     <p><b>Treat a new pool's numbers as unreliable.</b> A few days of fees on a thin pool says very little, and volatility measured from four price points says less. Watch it for a week before committing anything.</p>
   </details>
 </section>
@@ -303,7 +309,7 @@ let pools=[], sortKey="netDay", sortDir=-1, openRow=null;
 let seenBefore=LS("orca-seen",{});
 let watch=new Set(LS("orca-watch",[]));
 const filters={profit:false,newOnly:false,watchOnly:false,hideSpike:false};
-const TFLABEL={m5:"5 minutes",h1:"1 hour",h6:"6 hours",h24:"24 hours",d7:"7 days"};
+const TFLABEL={"5m":"5 minutes","15m":"15 minutes","30m":"30 minutes","1h":"1 hour","2h":"2 hours","4h":"4 hours","8h":"8 hours","24h":"24 hours","7d":"7 days","30d":"30 days"};
 const STABLE=new Set(["USDC","USDT","PYUSD","FDUSD","USDS","DAI","USDG","USDE","CASH","EURC","USD1","SUSD"]);
 
 function volAndAge(series){
@@ -320,8 +326,7 @@ function volAndAge(series){
 function humanL(rawL,decA,decB){const L=parseFloat(rawL),d=(Number(decA)+Number(decB))/2;
   return Number.isFinite(L)&&L>0&&Number.isFinite(d)?L/Math.pow(10,d):null;}
 
-const TFH={m5:5/60,h1:1,h6:6,h24:24,d7:168};
-const TFSRC={m5:"ds",h1:"ds",h6:"ds",h24:"ds",d7:"orca"};
+const PERIOD_HOURS={"5m":1/12,"15m":0.25,"30m":0.5,"1h":1,"2h":2,"4h":4,"8h":8,"24h":24,"7d":168,"30d":720};
 function sigmaFromChanges(pcObj){
   if(!pcObj)return null;
   const est=[];
@@ -334,70 +339,72 @@ function sigmaFromChanges(pcObj){
   const mid=Math.floor(est.length/2);
   return est.length%2?est[mid]:(est[mid-1]+est[mid])/2;
 }
+// What one unit of tokenB is worth in dollars, from the pool's own balances.
+function quoteUsd(pool,price){
+  const decA=Number(pool.tokenA?.decimals),decB=Number(pool.tokenB?.decimals);
+  const ba=parseFloat(pool.tokenBalanceA),bb=parseFloat(pool.tokenBalanceB),tvl=num(pool.tvlUsdc);
+  if(![decA,decB,ba,bb].every(Number.isFinite)||!(tvl>0)||!(price>0))return null;
+  const valueInB=(ba/10**decA)*price+(bb/10**decB);
+  if(!(valueInB>0))return null;
+  const q=tvl/valueInB;
+  return Number.isFinite(q)&&q>0?q:null;
+}
 function score(pool,ds,tfKey,holdDays){
-  const hrs=TFH[tfKey]??24, src=TFSRC[tfKey]||"ds";
-  const tvl=num(pool.tvlUsdc);
-  const s24=pool.stats?.["24h"]||{},s7=pool.stats?.["7d"]||{},s30=pool.stats?.["30d"]||{};
-  const price=num(pool.price);
+  const stats=pool.stats||{};
+  const tvl=num(pool.tvlUsdc),price=num(pool.price);
+  const s24=stats["24h"]||{},s7=stats["7d"]||{},s30=stats["30d"]||{};
   const A=pool.tokenA||{},B=pool.tokenB||{};
   const sa=STABLE.has((A.symbol||"").toUpperCase()), sb=STABLE.has((B.symbol||"").toUpperCase());
-  const feeRate=num(pool.feeRate)/1e6;
-  const adaptiveRate=pool.adaptiveFee?.currentRate!=null?num(pool.adaptiveFee.currentRate)/1e6:null;
-  const rate=pool.adaptiveFeeEnabled&&adaptiveRate?adaptiveRate:feeRate;
-
   const ov=volAndAge(pool.priceHistory7d);
   const dsSigma=sigmaFromChanges(ds?.priceChange);
-  const sigma=ov.ageDays===null&&ov.sigma!==null?ov.sigma:(dsSigma??ov.sigma);
-  const sigmaSrc=ov.ageDays===null&&ov.sigma!==null?"orca7d":(dsSigma!==null?"dexscreener":"orca7d");
+  const sigma=ov.sigma!==null&&ov.ageDays===null?ov.sigma:(ov.sigma??dsSigma);
+  const sigmaSrc=ov.sigma!==null?"orca7d":(dsSigma!==null?"dexscreener":null);
   const created=ds?.pairCreatedAt?Number(ds.pairCreatedAt):null;
   const ageDays=created?Math.max(0,(Date.now()-created)/864e5):ov.ageDays;
 
-  const dsV24=num(ds?.volume?.h24), orcaV24=num(s24.volume);
-  const cal=dsV24>0&&orcaV24>0?Math.min(5,Math.max(0.2,orcaV24/dsV24)):1;
+  const want=stats[tfKey], haveTf=!!(want&&want.fees!==undefined);
+  const useKey=haveTf?tfKey:(stats["24h"]?"24h":"7d");
+  const useHours=PERIOD_HOURS[useKey]??24;
+  const used=stats[useKey]||{};
+  const feesPerDay=num(used.fees)*(24/useHours);
+  const windowVol=num(used.volume);
 
-  let feesPerDay=null,windowVol=null,haveTf=false;
-  if(src==="ds"&&ds?.volume){
-    const v=num(ds.volume[tfKey])*cal;
-    if(v>0||tfKey==="h24"){windowVol=v;feesPerDay=v*rate*(24/hrs);haveTf=true;}
-  }
-  if(feesPerDay===null){
-    const f7=num(s7.fees),f24=num(s24.fees);
-    feesPerDay=tfKey==="d7"?(f7>0?f7/7:f24):(f24>0?f24:f7/7);
-    windowVol=tfKey==="d7"?num(s7.volume):num(s24.volume);
-    haveTf=src==="orca";
-  }
+  const rate=(pool.adaptiveFeeEnabled&&pool.adaptiveFee?.currentRate!=null
+    ?num(pool.adaptiveFee.currentRate):num(pool.feeRate))/1e6;
 
+  const qUsd=sb?1:quoteUsd(pool,price);
   const L=humanL(pool.liquidity,A.decimals,B.decimals);
-  let feePerL=L?feesPerDay/L:null;
-  const costPerL=sigma!==null&&price>0?(sigma*sigma*Math.sqrt(price))/4:null;
-  let basis="liquidity",edge=feePerL!==null&&costPerL?feePerL/costPerL:null;
-  if(edge===null||!Number.isFinite(edge)||edge>1000){
-    const y=tvl>0?feesPerDay/tvl:0;
-    edge=sigma!==null&&sigma>0?y/((sigma*sigma)/8):null; basis="tvl"; feePerL=null;
-  }
+  const feePerL=L?feesPerDay/L:null;
+  const costPerL=(sigma!==null&&price>0&&qUsd)?(sigma*sigma*Math.sqrt(price)/4)*qUsd:null;
+  const yTvl=tvl>0?feesPerDay/tvl:0;
+  const edgeTvl=sigma!==null&&sigma>0?yTvl/((sigma*sigma)/8):null;
+
+  let basis="liquidity";
+  let edge=feePerL!==null&&costPerL?feePerL/costPerL:null;
+  const ratio=edge!==null&&edgeTvl?edge/edgeTvl:null;
+  if(edge===null||!Number.isFinite(edge)||(ratio!==null&&(ratio>100||ratio<0.01))){edge=edgeTvl;basis="tvl";}
+
   const width=sigma!==null?Math.max(0.08,Math.min(0.85,1.5*sigma*Math.sqrt(holdDays))):null;
   let earns=null,needs=null,netDay=null;
   if(width&&price>0&&sigma!==null){
     const lp=lPerDollar(price,width);
-    needs=costPerL!==null?costPerL*lp:null;
-    earns=basis==="liquidity"&&feePerL!==null?feePerL*lp
-      :(tvl>0?(feesPerDay/tvl)*(lp/lPerDollar(price,0.5)):null);
-    if(earns!==null&&needs!==null)netDay=earns-needs;
+    if(basis==="liquidity"){earns=feePerL*lp;needs=costPerL*lp;}
+    else{const k=lp/lPerDollar(price,0.5);earns=yTvl*k;needs=((sigma*sigma)/8)*k;}
+    netDay=earns-needs;
   }
   const y24=tvl>0?num(s24.fees)/tvl:0, y7=tvl>0?num(s7.fees)/7/tvl:0, y30=tvl>0?num(s30.fees)/30/tvl:0;
-  const tx=ds?.txns?.[tfKey]||ds?.txns?.h24||null;
   return {address:pool.address,pair:`${A.symbol||"?"}/${B.symbol||"?"}`,
     base:sa&&!sb?B.symbol:A.symbol, quote:sa&&!sb?A.symbol:B.symbol,
     bothVolatile:!sa&&!sb, stablePair:sa&&sb, feeRate:rate*100,
-    adaptiveFee:!!pool.adaptiveFeeEnabled, price,tvl,
-    vol24:num(s24.volume), windowVol, haveTf,
+    adaptiveFee:!!pool.adaptiveFeeEnabled, price,quoteUsd:qUsd,tvl,
+    vol24:num(s24.volume), windowVol, haveTf, usedPeriod:useKey,
     volOverTvl:tvl>0?num(s24.volume)/tvl:0,
     yield24:y24,yield7d:y7,yield30d:y30,
     trend:(y7>0&&y30>0)?y7/y30:null, spike:(y7>0&&y24>3*y7),
-    sigma,sigmaSrc,created,ageDays,cal,
-    edge,basis,width,earns,needs,netDay,
+    sigma,sigmaSrc,created,ageDays,
+    edge,edgeTvl,basis,width,earns,needs,netDay,
     netPer1k:netDay!==null?netDay*1000:null,
-    dsUrl:ds?.url||null, txns:tx?{buys:num(tx.buys),sells:num(tx.sells)}:null, onDs:!!ds};
+    dsUrl:ds?.url||null, onDs:!!ds};
 }
 
 async function dexscreen(addresses){
@@ -423,7 +430,7 @@ async function load(){
     let data=null;
     try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&minTvl=0`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
     if(!data){
-      const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
+      const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&stats=5m,15m,30m,1h,2h,4h,8h,24h,7d,30d&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
       if(!r.ok) throw new Error("Orca returned "+r.status);
       const j=await r.json();
       const raw=Array.isArray(j?.data)?j.data:[];
@@ -481,7 +488,7 @@ function renderScan(){
     const e=p.edge, ec=e==null?"":e>=1.5?"gain":e>=1?"e-mid":"loss";
     const fresh=p.isNew||p.firstSeen>recentMs;
     return `<tr data-a="${p.address}" class="${openRow===p.address?"open ":""}${fresh?"isnew":""}">
-      <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.ageDays!=null&&p.ageDays<7?`<span class="tag new">${ageTxt(p.ageDays)} old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.txns&&(p.txns.buys+p.txns.sells)<10?`<span class="tag warn">${p.txns.buys+p.txns.sells} trades</span>`:""}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}${links(p)}</td>
+      <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.ageDays!=null&&p.ageDays<7?`<span class="tag new">${ageTxt(p.ageDays)} old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.haveTf?"":'<span class="tag warn">24h data</span>'}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}${links(p)}</td>
       <td class="mono ${p.netDay>0?"gain":"loss"}"><b>${pc(p.netDay)}</b></td>
       <td class="mono">${pc(p.earns)}</td>
       <td class="mono">${pc(p.needs)}</td>
@@ -504,7 +511,7 @@ function detail(p){
   return `<tr class="detail"><td colspan="10">
     <p class="verdict ${v[0]}"><b>${v[1]}</b></p>
     <div class="dgrid">
-      <div class="dcell"><div class="v mono">${px(p.price)}</div><div class="k">${p.base} price in ${p.quote}</div></div>
+      <div class="dcell"><div class="v mono">${p.quoteUsd&&Math.abs(p.quoteUsd-1)<0.02?px(p.price):(+p.price).toPrecision(6)+" "+p.quote}</div><div class="k">${p.base} price in ${p.quote}</div></div>
       <div class="dcell"><div class="v mono">±${p.width?(p.width*100).toFixed(0):"—"}%</div><div class="k">Suggested range</div></div>
       <div class="dcell"><div class="v mono gain">${pc(p.earns)}</div><div class="k">Fee yield / day there</div></div>
       <div class="dcell"><div class="v mono">${pc(p.needs)}</div><div class="k">Break-even / day</div></div>
@@ -512,8 +519,8 @@ function detail(p){
       <div class="dcell"><div class="v mono">${p.bothVolatile?"Short both":"Short "+p.base}</div><div class="k">Hedge needed</div></div>
     </div>
     <p style="margin:0 0 8px">${p.width&&p.earns!=null?`<button class="primary" data-plan="${p.address}">Plan this pool →</button>`:""}</p>
-    <p class="status">Fees measured over the <b>${TFLABEL[$("tf").value]||"24 hours"}</b> window${p.haveTf?"":" (that window was unavailable, so the 24-hour figure was used)"}. Volatility from ${p.sigmaSrc==="orca7d"?"Orca's 7-day price history":"DexScreener's price changes"}. Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}${p.basis==="tvl"?" Scored from TVL rather than on-chain liquidity.":""}</p>
-    <p class="status">${p.txns?`${p.txns.buys} buys / ${p.txns.sells} sells in that window · `:""}Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}</p>
+    <p class="status">Fees from Orca's own <b>${TFLABEL[p.usedPeriod]||p.usedPeriod}</b> figures${p.haveTf?"":` (the ${TFLABEL[$("tf").value]||"chosen"} window wasn't returned for this pool)`}. Volatility from ${p.sigmaSrc==="orca7d"?"Orca's 7-day price history":p.sigmaSrc==="dexscreener"?"DexScreener's price changes":"no source"}. Scored on ${p.basis==="liquidity"?"the pool's active liquidity":"TVL, because the liquidity figure looked unreliable"}.${p.quoteUsd&&Math.abs(p.quoteUsd-1)>0.01?` Priced in ${p.quote} at $${p.quoteUsd.toFixed(4)}.`:""} Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}</p>
+    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}</p>
   </td></tr>`;
 }
 
@@ -521,13 +528,14 @@ function detail(p){
 function planPool(p){
   const w=(p.width*100).toFixed(0);
   $("sym").value=p.base||"TOKEN";
-  $("p").value=+p.price.toPrecision(8);
+  const usdPrice=p.quoteUsd?p.price*p.quoteUsd:p.price;
+  $("p").value=+usdPrice.toPrecision(8);
   $("wlo").value=w; $("whi").value=w;
   $("fee").value=+(p.earns*100).toFixed(4);
   $("refw").value=w;
   $("days").value=+$("hold").value||30;
   if(p.bothVolatile) $("swap").value=Math.max(+$("swap").value||0,0.2);
-  $("fromscan").innerHTML=`<p class="fromscan">Loaded from the scanner: <b>${p.pair}</b> at ±${w}%, fee yield ${pc(p.earns)}/day. Check the funding rate and maintenance margin for ${p.base} on your perp venue before trading.${p.bothVolatile?` This pool pairs two volatile tokens, so the planner only covers the ${p.base} leg — you also need a short on ${p.quote}.`:""}</p>`;
+  $("fromscan").innerHTML=`<p class="fromscan">Loaded from the scanner: <b>${p.pair}</b> at ±${w}%, fee yield ${pc(p.earns)}/day${p.quoteUsd&&Math.abs(p.quoteUsd-1)>0.02?`, with the ${p.base} price converted to dollars (${p.quote} at $${p.quoteUsd.toFixed(2)})`:""}. Check the funding rate and maintenance margin for ${p.base} on your perp venue before trading.${p.bothVolatile?` This pool pairs two volatile tokens, so the planner only covers the ${p.base} leg — you also need a short on ${p.quote}.`:""}</p>`;
   showTab("plan"); run();
 }
 
