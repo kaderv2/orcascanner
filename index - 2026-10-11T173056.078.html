@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Delta-Neutral Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F2F0EA;--panel:#FFF;--ink:#16191C;--mute:#63696F;--line:#DCD8CE;--accent:#C8901A;--accent-soft:rgba(200,144,26,.14);--gain:#137A55;--loss:#B23A3A;--mid:#9A7B1F;--lp:#3C6E9E;--new:#3C6E9E;--new-soft:rgba(60,110,158,.14);
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101215;--panel:#191C20;--ink:#ECE9E3;--mute:#9AA1A8;--line:#2A2E34;--accent:#F0B429;--accent-soft:rgba(240,180,41,.16);--gain:#3FC79A;--loss:#FF7070;--mid:#E0B050;--lp:#6FA8DC;--new:#6FA8DC;--new-soft:rgba(111,168,220,.16)}}
+:root[data-theme="dark"]{--bg:#101215;--panel:#191C20;--ink:#ECE9E3;--mute:#9AA1A8;--line:#2A2E34;--accent:#F0B429;--accent-soft:rgba(240,180,41,.16);--gain:#3FC79A;--loss:#FF7070;--mid:#E0B050;--lp:#6FA8DC;--new:#6FA8DC;--new-soft:rgba(111,168,220,.16)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Space Grotesk",system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.45}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1240px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:clamp(1.3rem,3.6vw,1.7rem);margin:0;letter-spacing:-.02em}
+.masthead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px}
+.tabs button{border:0;background:transparent;color:var(--mute);font:inherit;font-weight:600;padding:8px 16px;border-radius:9px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--accent);color:#16191C}
+.sub{color:var(--mute);margin:0 0 16px;max-width:64ch;font-size:.92rem}
+button{font:inherit;font-weight:600;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:8px 13px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#16191C}
+button:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}
+input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gain{color:var(--gain)}.loss{color:var(--loss)}.e-mid{color:var(--mid)}
+.status{font-size:.82rem;color:var(--mute)}
+.err{background:rgba(178,58,58,.12);color:var(--loss);border-radius:10px;padding:10px 12px;font-size:.88rem;margin-bottom:12px}
+details{border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:var(--panel);margin-top:14px}
+summary{cursor:pointer;font-weight:600;font-size:.92rem}
+details p{color:var(--mute);font-size:.88rem;margin:8px 0 0;max-width:78ch}
+section[hidden]{display:none}
+
+/* ---------- scan ---------- */
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px}
+.controls label{display:block;font-size:.73rem;color:var(--mute)}
+.controls input,.controls select{width:100%;margin-top:4px}
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.chip{font-size:.82rem;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-weight:600}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#16191C}
+.chip.newchip[aria-pressed="true"]{background:var(--new);border-color:var(--new);color:#fff}
+.tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow-x:auto}
+#view-scan table{border-collapse:collapse;width:100%;font-size:.85rem;min-width:980px}
+#view-scan th,#view-scan td{text-align:right;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+#view-scan th{font-size:.69rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);font-weight:600;position:sticky;top:0;background:var(--panel);cursor:pointer;user-select:none;z-index:1}
+#view-scan th[aria-sort]{color:var(--ink)}
+#view-scan th:first-child,#view-scan td:first-child{text-align:left}
+#view-scan tbody tr{cursor:pointer}
+#view-scan tbody tr:hover,#view-scan tbody tr.open{background:var(--accent-soft)}
+#view-scan tbody tr.isnew td:first-child{box-shadow:inset 3px 0 0 var(--new)}
+.pairname{font-weight:700}
+.tier{font-size:.7rem;color:var(--mute);margin-left:5px}
+.tag{display:inline-block;font-size:.66rem;font-weight:600;padding:1px 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);margin-left:5px}
+.tag.new{background:var(--new-soft);color:var(--new)}
+.tag.warn{background:rgba(178,58,58,.14);color:var(--loss)}
+.star{cursor:pointer;color:var(--mute);margin-right:6px;font-size:.95rem}
+.star.on{color:var(--accent)}
+.detail td{background:var(--bg);white-space:normal}
+.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;padding:4px 0 8px}
+.dcell{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--panel)}
+.dcell .v{font-weight:700}
+.dcell .k{font-size:.69rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.verdict{font-size:.92rem;margin:0 0 8px}
+.foot{margin-top:16px;color:var(--mute);font-size:.85rem;max-width:78ch}
+
+/* ---------- plan ---------- */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.panel h2{margin:0 0 2px;font-size:1.02rem}
+.panel .note{margin:0 0 12px;color:var(--mute);font-size:.82rem}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}
+.fields label{display:block;font-size:.75rem;color:var(--mute)}
+.fields label input,.fields label select{display:block;width:100%;margin-top:4px;font-family:"IBM Plex Mono",monospace;font-size:.92rem}
+.fields label select{font-family:"Space Grotesk",sans-serif}
+.rangebar{margin:14px 0 2px}
+.track{position:relative;height:34px;border-radius:8px;background:var(--line);overflow:hidden}
+.track .in{position:absolute;top:0;bottom:0;background:var(--accent-soft);border-left:2px solid var(--accent);border-right:2px solid var(--accent)}
+.track .now{position:absolute;top:0;bottom:0;width:2px;background:var(--ink)}
+.track span{position:absolute;top:8px;font-size:.72rem;color:var(--mute);font-family:"IBM Plex Mono",monospace}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+.kpi{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.kpi .v{font-size:1.2rem;font-weight:700;letter-spacing:-.02em}
+.kpi .k{font-size:.71rem;color:var(--mute);text-transform:uppercase;letter-spacing:.05em}
+.steps{counter-reset:s;list-style:none;margin:0;padding:0}
+.steps li{counter-increment:s;display:grid;grid-template-columns:24px 1fr;gap:9px;padding:9px 0;border-bottom:1px solid var(--line)}
+.steps li:last-child{border-bottom:0}
+.steps li::before{content:counter(s);display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:.78rem}
+.steps b{display:block}.steps small{color:var(--mute)}
+.splitbar{display:flex;height:11px;border-radius:6px;overflow:hidden;background:var(--line);margin:4px 0 8px}
+.splitbar i{display:block}.splitbar .a{background:var(--lp)}.splitbar .b{background:var(--loss);opacity:.8}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.8rem;color:var(--mute)}
+.legend b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
+.band{background:var(--accent-soft);border-radius:10px;padding:9px 11px;font-size:.9rem;margin:0 0 12px}
+.band.bad{background:rgba(178,58,58,.12);color:var(--loss)}
+#view-plan table{border-collapse:collapse;width:100%;font-size:.85rem}
+#view-plan th,#view-plan td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+#view-plan th{font-size:.7rem;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
+#view-plan th:first-child,#view-plan td:first-child{text-align:left}
+#view-plan tr.flat td{background:var(--accent-soft)}
+.warn{color:var(--loss);font-size:.85rem;margin:8px 0 0}
+.fromscan{background:var(--new-soft);color:var(--new);border-radius:10px;padding:8px 11px;font-size:.86rem;margin:0 0 12px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead">
+    <h1>Delta-neutral desk</h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-scan" aria-selected="true">Find a pool</button>
+      <button role="tab" id="tab-plan" aria-selected="false">Plan a position</button>
+    </div>
+  </div>
+
+<!-- ====================== SCAN ====================== -->
+<section id="view-scan" role="tabpanel">
+  <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start">
+    <p class="sub">Every Orca Whirlpool, ranked by what a hedged position would actually clear per day after the cost of the token moving. New pools are flagged as they appear.</p>
+    <div style="text-align:right"><button class="primary" id="refresh">Refresh</button><div class="status" id="status">Loading…</div></div>
+  </div>
+
+  <div class="controls">
+    <label>Rank by<select id="rank">
+      <option value="netDay" selected>Net yield per day</option>
+      <option value="edge">Edge (safety margin)</option>
+      <option value="ageDays">Newest first</option>
+      <option value="earns">Fee yield per day</option>
+      <option value="tvl">TVL</option>
+      <option value="vol24">Volume 24h</option>
+      <option value="volOverTvl">Volume ÷ TVL</option>
+      <option value="sigma">Most volatile</option>
+    </select></label>
+    <label>Search<input id="q" type="text" placeholder="ZEC, SOL…" spellcheck="false"></label>
+    <label>Min TVL ($)<input id="minTvl" type="number" value="0" step="25000"></label>
+    <label>Hold for<select id="hold"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+    <label>Pairs<select id="kind">
+      <option value="all" selected>All pairs</option>
+      <option value="stable">Token / stablecoin only</option>
+    </select></label>
+  </div>
+
+  <div class="chips">
+    <button class="chip" id="cProfit" aria-pressed="false">Profitable only</button>
+    <button class="chip newchip" id="cNew" aria-pressed="false">New pools</button>
+    <button class="chip" id="cWatch" aria-pressed="false">Watchlist</button>
+    <button class="chip" id="cSpike" aria-pressed="false">Hide fee spikes</button>
+    <span class="status" id="counts"></span>
+  </div>
+
+  <div id="err"></div>
+  <div class="tablewrap"><table><thead><tr>
+    <th data-k="pair">Pool</th>
+    <th data-k="netDay">Net / day</th>
+    <th data-k="earns">Earns</th>
+    <th data-k="needs">Needs</th>
+    <th data-k="edge">Edge</th>
+    <th data-k="sigma">Moves / day</th>
+    <th data-k="width">Range</th>
+    <th data-k="tvl">TVL</th>
+    <th data-k="vol24">Vol 24h</th>
+    <th data-k="ageDays">Age</th>
+  </tr></thead><tbody id="rows"></tbody></table></div>
+
+  <p class="foot"><b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it. That's the number that decides whether a pool is worth your money. <b>Edge</b> is the ratio of those two — a safety margin, not a return. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
+
+  <details>
+    <summary>Why ranking works this way, and how new pools are spotted</summary>
+    <p><b>Edge alone was misleading.</b> It's a ratio, so a sleepy pool with almost no fees and almost no volatility can score 36× while earning $0.51 a day per $1,000. A busy pool scoring 3× earns $2.41. Ranking uses net yield per day, with edge kept as a second column so you can still see how much headroom a pool has before fees stop covering the movement.</p>
+    <p><b>Reading them together:</b> high net and edge above 1.5 is the sweet spot. High net with edge near 1 means the pool pays well but has no margin for error — a quiet week kills it. High edge with low net is safe and not worth the effort.</p>
+    <p><b>New pools</b> are found from the pool's own 7-day price history. Orca returns 14 slots covering a week, and a pool younger than that has empty leading slots, which gives its age to within half a day. The scanner also remembers every pool address it has seen before in this browser, so anything appearing for the first time is marked even if it's older than a week. Star a pool to keep it on your watchlist.</p>
+    <p><b>Treat a new pool's numbers as unreliable.</b> A few days of fees on a thin pool says very little, and volatility measured from four price points says less. Watch it for a week before committing anything.</p>
+  </details>
+</section>
+
+<!-- ====================== PLAN ====================== -->
+<section id="view-plan" role="tabpanel" hidden>
+  <p class="sub">One range, one short. Enter the pool and what you want to invest; it works out the exact deposit split, the short that matches it, and what happens at every end price.</p>
+  <div id="fromscan"></div>
+
+  <div class="panel">
+    <h2>Position</h2>
+    <p class="note">Set the range once. Below and above can differ — a wide range is rarely an even split, and the planner sizes the deposit accordingly.</p>
+    <div class="fields">
+      <label>Token<input id="sym" type="text" value="SOL"></label>
+      <label>Price now ($)<input id="p" type="number" value="150" step="any"></label>
+      <label>Amount to invest ($)<input id="budget" type="number" value="500" step="10"></label>
+      <label>Range below (%)<input id="wlo" type="number" value="20" step="1" min="1" max="95"></label>
+      <label>Range above (%)<input id="whi" type="number" value="20" step="1" min="1"></label>
+      <label>Short leverage<select id="lev"></select></label>
+      <label>Hold for (days)<input id="days" type="number" value="30" step="1" min="1"></label>
+      <label>Re-hedge when off by (%)<input id="thr" type="number" value="25" step="5" min="5" max="100"></label>
+    </div>
+    <div class="rangebar"><div class="track" id="track"></div></div>
+    <p class="note" style="margin:10px 0 0">Leverage sets how much margin the short ties up. It does not change the hedge: shorting 0.11 ZEC hedges 0.11 ZEC whether it's 1x or 10x. What breaks neutrality is the price moving, and a narrow range breaks it about twice as fast.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Staying neutral</h2>
+    <p class="note" id="driftnote"></p>
+    <div style="overflow-x:auto"><table id="ladder"></table></div>
+  </div>
+
+  <div class="panel">
+    <h2>Pool and venue</h2>
+    <p class="note">Take a day's fees on Orca and divide by the position's value. Say which range that reading came from — a tight range earns far more per dollar than a wide one, so the same number means very different things.</p>
+    <div class="fields">
+      <label>Fee yield per day (%)<input id="fee" type="number" value="0.4" step="0.01"></label>
+      <label>…that reading is from ±(%)<input id="refw" type="number" value="20" step="1" min="0.5" placeholder="blank = this range"></label>
+      <label>Funding to shorts / day (%)<input id="fund" type="number" value="0.03" step="0.005"></label>
+      <label>Order type<select id="otype"><option value="maker" selected>Limit, post-only</option><option value="taker">Market</option></select></label>
+      <label>HIP-3 market<select id="hip3"><option value="0" selected>No</option><option value="1">Yes (stocks etc.)</option></select></label>
+      <label>Perp slippage (%)<input id="slip" type="number" value="0" step="0.01"></label>
+      <label>Swap fee + slippage (%)<input id="swap" type="number" value="0.1" step="0.01"></label>
+      <label>Maintenance margin (%)<input id="mmr" type="number" value="2.5" step="0.25"></label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>What to do</h2>
+    <div class="kpis" id="kpis"></div>
+    <div class="splitbar" id="splitbar"></div>
+    <div class="legend" id="legend"></div>
+    <ol class="steps" id="steps" style="margin-top:12px"></ol>
+    <p class="warn" id="warn"></p>
+  </div>
+
+  <div class="panel">
+    <h2>Outcomes after <span id="dlabel">30</span> days</h2>
+    <p class="note">No rebalancing, no range adjustment. Fees assume the price stayed inside the range if it ends inside, and less of the period the further outside it ends.</p>
+    <div id="band"></div>
+    <div style="overflow-x:auto"><table id="scen"></table></div>
+  </div>
+
+  <details>
+    <summary>How the split and the short are worked out</summary>
+    <p><b>Uneven ranges.</b> For a range [Pa, Pb] at price P the pool takes token = L(1/√P − 1/√Pb) and USDC = L(√P − √Pa). Those are only equal when the range is symmetric in √price, so a −20% / +20% range is not a 50/50 deposit, and a −40% / +80% range is further off still. The planner solves the exact amounts and sizes the short against the token side, so you deposit what Orca will actually accept.</p>
+    <p><b>The short, and what leverage does.</b> Your LP's exposure is its token balance, so the matching short is that many tokens — that is the whole hedge. Leverage only decides how much margin those tokens tie up: shorting 0.11 ZEC at 4x is the same hedge as 0.11 ZEC at 2x, with half the margin and a closer liquidation price. Raising leverage without raising the token count changes nothing about neutrality; raising the token count past the LP's balance is no longer a hedge, it is a bet that the price falls.</p>
+    <p><b>Drift is the real problem, and range width sets its speed.</b> The match is exact only at today's price. As the price rises the LP sells tokens and the short becomes too big; as it falls the LP buys and the short becomes too small. A narrow range packs the same money into a smaller span, so the token balance swings through its whole span over a smaller move: a ±15% range goes off by a quarter after roughly a 3% move, where ±30% takes about 6%. Same hedge, twice the drift speed. That is why a tight range needs re-hedging and a wide one can be left alone.</p>
+    <p><b>Fee yield and range width.</b> Liquidity concentrates as the range narrows, so the same dollar earns more fees in a tight range: roughly four times as much at ±5% as at ±20%. Tell the planner which range your reading came from and it scales the yield to the range you're planning. Leave that box blank if the figure already came from this exact range. The catch is that the same concentration multiplies the loss when the price moves, so a tight range raises both sides of the ledger, not just the income.</p>
+    <p><b>Fees and costs.</b> Fee income is your position's value times the daily yield, earned only while in range. Costs are the swap into the token, the perp fee on opening and closing (0.015% post-only, 0.045% market on Hyperliquid, doubled on HIP-3 markets; Aster's maker fee is currently 0%), and funding, which is added when it pays shorts.</p>
+  </details>
+</section>
+</div>
+
+<script>
+/* ============ shared helpers ============ */
+const $=id=>document.getElementById(id);
+const usd=(n,d=2)=>{const a=Math.abs(n||0);if(d===2&&a>0&&a<0.1)d=3;return (n<0?"−$":"$")+a.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});};
+const usdShort=n=>{const a=Math.abs(n||0);
+  if(a>=1e9)return "$"+(n/1e9).toFixed(2)+"b"; if(a>=1e6)return "$"+(n/1e6).toFixed(2)+"m";
+  if(a>=1e3)return "$"+(n/1e3).toFixed(0)+"k"; return "$"+(n||0).toFixed(0);};
+const px=v=>v>=1?usd(v):"$"+(+v).toPrecision(4);
+const tok=n=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:Math.abs(n)<1?6:4});
+const pct=(n,d=2)=>(n*100).toFixed(d)+"%";
+const pc=(n,d=3)=>n==null?"—":(n*100).toFixed(d)+"%";
+const cls=v=>v>=0?"gain":"loss";
+const num=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
+const LS=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+
+function lpAt(L,Pa,Pb,p){const sa=Math.sqrt(Pa),sb=Math.sqrt(Pb);let x,y;
+  if(p<=Pa){x=L*(1/sa-1/sb);y=0}else if(p>=Pb){x=0;y=L*(sb-sa)}else{const s=Math.sqrt(p);x=L*(1/s-1/sb);y=L*(s-sa)}
+  return{x,y,val:x*p+y};}
+function lPerDollar(P,w){const v=lpAt(1,P*(1-w),P*(1+w),P).val;return v>0?1/v:0;}
+
+/* ============ tabs ============ */
+function showTab(name){
+  const scan=name==="scan";
+  $("view-scan").hidden=!scan; $("view-plan").hidden=scan;
+  $("tab-scan").setAttribute("aria-selected",String(scan));
+  $("tab-plan").setAttribute("aria-selected",String(!scan));
+  save("dnd-tab",name);
+  window.scrollTo({top:0});
+}
+$("tab-scan").addEventListener("click",()=>showTab("scan"));
+$("tab-plan").addEventListener("click",()=>showTab("plan"));
+
+/* ============================================================
+   SCAN
+   ============================================================ */
+let pools=[], sortKey="netDay", sortDir=-1, openRow=null;
+let seenBefore=LS("orca-seen",{});
+let watch=new Set(LS("orca-watch",[]));
+const filters={profit:false,newOnly:false,watchOnly:false,hideSpike:false};
+const STABLE=new Set(["USDC","USDT","PYUSD","FDUSD","USDS","DAI","USDG","USDE","CASH","EURC","USD1","SUSD"]);
+
+function volAndAge(series){
+  if(!Array.isArray(series)||!series.length)return{sigma:null,ageDays:null};
+  const slots=series.length, hps=(7*24)/Math.max(1,slots-1);
+  const p=series.map(num).filter(v=>v>0);
+  const ageDays=p.length>=slots?null:Math.max(0.5,((p.length-1)*hps)/24);
+  if(p.length<4)return{sigma:null,ageDays};
+  const r=[];for(let i=1;i<p.length;i++)r.push(Math.log(p[i]/p[i-1]));
+  const m=r.reduce((a,b)=>a+b,0)/r.length;
+  const v=r.reduce((a,b)=>a+(b-m)**2,0)/Math.max(1,r.length-1);
+  return{sigma:Math.sqrt(v)*Math.sqrt(24/hps),ageDays};
+}
+function humanL(rawL,decA,decB){const L=parseFloat(rawL),d=(Number(decA)+Number(decB))/2;
+  return Number.isFinite(L)&&L>0&&Number.isFinite(d)?L/Math.pow(10,d):null;}
+
+function score(pool,holdDays){
+  const tvl=num(pool.tvlUsdc);
+  const s24=pool.stats?.["24h"]||{},s7=pool.stats?.["7d"]||{},s30=pool.stats?.["30d"]||{};
+  const fees24=num(s24.fees),fees7=num(s7.fees),fees30=num(s30.fees),vol24=num(s24.volume);
+  const price=num(pool.price);
+  const {sigma,ageDays}=volAndAge(pool.priceHistory7d);
+  const A=pool.tokenA||{},B=pool.tokenB||{};
+  const sa=STABLE.has((A.symbol||"").toUpperCase()), sb=STABLE.has((B.symbol||"").toUpperCase());
+  const L=humanL(pool.liquidity,A.decimals,B.decimals);
+  const feesPerDay=fees7>0?fees7/7:fees24;
+  let feePerL=L?feesPerDay/L:null;
+  const costPerL=sigma!==null&&price>0?(sigma*sigma*Math.sqrt(price))/4:null;
+  let basis="liquidity", edge=feePerL!==null&&costPerL?feePerL/costPerL:null;
+  if(edge===null||!Number.isFinite(edge)||edge>1000){
+    const y=tvl>0?feesPerDay/tvl:0;
+    edge=sigma!==null&&sigma>0?y/((sigma*sigma)/8):null; basis="tvl"; feePerL=null;
+  }
+  const width=sigma!==null?Math.max(0.08,Math.min(0.85,1.5*sigma*Math.sqrt(holdDays))):null;
+  let earns=null,needs=null,netDay=null;
+  if(width&&price>0&&sigma!==null){
+    const lp=lPerDollar(price,width);
+    needs=costPerL!==null?costPerL*lp:null;
+    earns=basis==="liquidity"&&feePerL!==null?feePerL*lp
+      :(tvl>0?(feesPerDay/tvl)*(lp/lPerDollar(price,0.5)):null);
+    if(earns!==null&&needs!==null)netDay=earns-needs;
+  }
+  const y24=tvl>0?fees24/tvl:0, y7=tvl>0?fees7/7/tvl:0, y30=tvl>0?fees30/30/tvl:0;
+  return {address:pool.address,pair:`${A.symbol||"?"}/${B.symbol||"?"}`,
+    base:sa&&!sb?B.symbol:A.symbol, quote:sa&&!sb?A.symbol:B.symbol,
+    bothVolatile:!sa&&!sb, stablePair:sa&&sb, feeRate:num(pool.feeRate)/10000,
+    adaptiveFee:!!pool.adaptiveFeeEnabled, price,tvl,vol24,
+    volOverTvl:tvl>0?vol24/tvl:0, yield24:y24,yield7d:y7,yield30d:y30,
+    trend:(y7>0&&y30>0)?y7/y30:null, spike:(y7>0&&y24>3*y7),
+    sigma,ageDays,isNew:ageDays!==null,edge,basis,width,earns,needs,netDay,
+    netPer1k:netDay!==null?netDay*1000:null};
+}
+
+async function load(){
+  $("status").textContent="Loading…"; $("err").innerHTML=""; $("refresh").disabled=true;
+  const hold=+$("hold").value||30;
+  try{
+    let data=null;
+    try{ const r=await fetch(`/api/pools?hold=${hold}&minTvl=0`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
+    if(!data){
+      const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
+      if(!r.ok) throw new Error("Orca returned "+r.status);
+      const j=await r.json();
+      const raw=Array.isArray(j?.data)?j.data:[];
+      if(!raw.length) throw new Error("No pools in the response");
+      data={pools:raw.map(p=>score(p,hold)).filter(p=>!p.stablePair),scanned:raw.length,at:Date.now(),direct:true};
+    }
+    pools=data.pools;
+    const now=Date.now(); let fresh=0;
+    pools.forEach(p=>{ if(!seenBefore[p.address]){seenBefore[p.address]=now;fresh++;} p.firstSeen=seenBefore[p.address]; });
+    save("orca-seen",seenBefore);
+    $("status").textContent=`${data.scanned||pools.length} pools${data.pages?` · ${data.pages} pages`:""}${data.direct?" · direct":""} · ${new Date(data.at||now).toLocaleTimeString()}`;
+    if(fresh&&Object.keys(seenBefore).length>fresh) $("status").textContent+=` · ${fresh} new to you`;
+  }catch(e){
+    $("err").innerHTML=`<div class="err">${e.message}. If this isn't running on Vercel, the browser may be blocked from calling Orca directly — the <code>/api/pools</code> function exists to avoid that.</div>`;
+    $("status").textContent="Failed";
+  }
+  $("refresh").disabled=false; renderScan();
+}
+
+function renderScan(){
+  const q=($("q").value||"").trim().toUpperCase();
+  const minTvl=+$("minTvl").value||0, kind=$("kind").value;
+  const recentMs=Date.now()-7*864e5;
+  let rows=pools.filter(p=>{
+    if(p.tvl<minTvl) return false;
+    if(kind==="stable"&&p.bothVolatile) return false;
+    if(q&&!p.pair.toUpperCase().includes(q)) return false;
+    if(filters.profit&&!(p.netDay>0)) return false;
+    if(filters.newOnly&&!(p.isNew||p.firstSeen>recentMs)) return false;
+    if(filters.watchOnly&&!watch.has(p.address)) return false;
+    if(filters.hideSpike&&p.spike) return false;
+    return true;
+  });
+  const val=p=>{if(sortKey==="pair")return p.pair;
+    if(sortKey==="ageDays")return p.ageDays==null?999:p.ageDays;
+    const v=p[sortKey];return v==null?-1e9:v;};
+  rows.sort((a,b)=>{const x=val(a),y=val(b);
+    if(sortKey==="ageDays")return (x-y)*(sortDir===-1?1:-1);
+    return (typeof x==="string"?x.localeCompare(y):x-y)*sortDir;});
+
+  document.querySelectorAll("#view-scan th[data-k]").forEach(th=>{
+    if(th.dataset.k===sortKey) th.setAttribute("aria-sort",sortDir===-1?"descending":"ascending");
+    else th.removeAttribute("aria-sort");});
+
+  const prof=pools.filter(p=>p.netDay>0).length, nw=pools.filter(p=>p.isNew||p.firstSeen>recentMs).length;
+  $("counts").textContent=`${rows.length} shown · ${prof} profitable · ${nw} new · ${watch.size} watched`;
+
+  $("rows").innerHTML=rows.map(p=>{
+    const e=p.edge, ec=e==null?"":e>=1.5?"gain":e>=1?"e-mid":"loss";
+    const fresh=p.isNew||p.firstSeen>recentMs;
+    return `<tr data-a="${p.address}" class="${openRow===p.address?"open ":""}${fresh?"isnew":""}">
+      <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.isNew?`<span class="tag new">${p.ageDays.toFixed(1)}d old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}</td>
+      <td class="mono ${p.netDay>0?"gain":"loss"}"><b>${pc(p.netDay)}</b></td>
+      <td class="mono">${pc(p.earns)}</td>
+      <td class="mono">${pc(p.needs)}</td>
+      <td class="mono ${ec}">${e==null?"—":e.toFixed(2)+"×"}</td>
+      <td class="mono">${p.sigma==null?"—":pc(p.sigma,1)}</td>
+      <td class="mono">${p.width?"±"+(p.width*100).toFixed(0)+"%":"—"}</td>
+      <td class="mono">${usdShort(p.tvl)}</td>
+      <td class="mono">${usdShort(p.vol24)}</td>
+      <td class="mono">${p.ageDays!=null?p.ageDays.toFixed(1)+"d":"7d+"}</td>
+    </tr>${openRow===p.address?detail(p):""}`;}).join("")
+    || `<tr><td colspan="10" class="status" style="padding:16px">Nothing matches. Clear a filter or lower the minimum TVL.</td></tr>`;
+}
+
+function detail(p){
+  const v = p.netDay==null?["","Not enough data to judge this pool yet."]
+    : p.netDay<=0?["loss",`Skip it. ${p.base} moves more than the pool pays for.`]
+    : p.edge>=1.5?["gain",`Worth opening. A $1,000 position would clear about $${p.netPer1k.toFixed(2)} a day at ±${(p.width*100).toFixed(0)}%, with fees ${p.edge.toFixed(1)}× the movement cost.`]
+    : ["e-mid",`Thin margin. It clears about $${p.netPer1k.toFixed(2)} a day per $1,000, but fees are only ${p.edge.toFixed(2)}× the movement cost — a quiet week turns this negative.`];
+  const trend=p.trend==null?"no 30-day history":p.trend>1.3?`fees up ${p.trend.toFixed(1)}× on the 30-day average`:p.trend<0.75?`fees down to ${p.trend.toFixed(2)}× the 30-day average`:"fees steady against the 30-day average";
+  return `<tr class="detail"><td colspan="10">
+    <p class="verdict ${v[0]}"><b>${v[1]}</b></p>
+    <div class="dgrid">
+      <div class="dcell"><div class="v mono">${px(p.price)}</div><div class="k">${p.base} price in ${p.quote}</div></div>
+      <div class="dcell"><div class="v mono">±${p.width?(p.width*100).toFixed(0):"—"}%</div><div class="k">Suggested range</div></div>
+      <div class="dcell"><div class="v mono gain">${pc(p.earns)}</div><div class="k">Fee yield / day there</div></div>
+      <div class="dcell"><div class="v mono">${pc(p.needs)}</div><div class="k">Break-even / day</div></div>
+      <div class="dcell"><div class="v mono">${p.netPer1k!=null?"$"+p.netPer1k.toFixed(2):"—"}</div><div class="k">Net / day per $1,000</div></div>
+      <div class="dcell"><div class="v mono">${p.bothVolatile?"Short both":"Short "+p.base}</div><div class="k">Hedge needed</div></div>
+    </div>
+    <p style="margin:0 0 8px">${p.width&&p.earns!=null?`<button class="primary" data-plan="${p.address}">Plan this pool →</button>`:""}</p>
+    <p class="status">Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}${p.basis==="tvl"?" Scored from TVL rather than on-chain liquidity.":""}</p>
+    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span> · first seen ${new Date(p.firstSeen).toLocaleDateString()}</p>
+  </td></tr>`;
+}
+
+/* ---- handoff: scanner row -> planner ---- */
+function planPool(p){
+  const w=(p.width*100).toFixed(0);
+  $("sym").value=p.base||"TOKEN";
+  $("p").value=+p.price.toPrecision(8);
+  $("wlo").value=w; $("whi").value=w;
+  $("fee").value=+(p.earns*100).toFixed(4);
+  $("refw").value=w;
+  $("days").value=+$("hold").value||30;
+  if(p.bothVolatile) $("swap").value=Math.max(+$("swap").value||0,0.2);
+  $("fromscan").innerHTML=`<p class="fromscan">Loaded from the scanner: <b>${p.pair}</b> at ±${w}%, fee yield ${pc(p.earns)}/day. Check the funding rate and maintenance margin for ${p.base} on your perp venue before trading.${p.bothVolatile?` This pool pairs two volatile tokens, so the planner only covers the ${p.base} leg — you also need a short on ${p.quote}.`:""}</p>`;
+  showTab("plan"); run();
+}
+
+document.querySelectorAll("#view-scan th[data-k]").forEach(th=>th.addEventListener("click",()=>{
+  const k=th.dataset.k;
+  if(sortKey===k)sortDir=-sortDir; else{sortKey=k;sortDir=k==="pair"?1:-1;}
+  if([...$("rank").options].some(o=>o.value===k)) $("rank").value=k;
+  renderScan();}));
+$("rank").addEventListener("change",()=>{sortKey=$("rank").value;sortDir=-1;renderScan();});
+$("rows").addEventListener("click",e=>{
+  const pl=e.target.dataset.plan;
+  if(pl){const p=pools.find(x=>x.address===pl); if(p)planPool(p); return;}
+  const st=e.target.dataset.star;
+  if(st){ watch.has(st)?watch.delete(st):watch.add(st); save("orca-watch",[...watch]); renderScan(); return; }
+  const tr=e.target.closest("tr[data-a]"); if(!tr)return;
+  openRow=openRow===tr.dataset.a?null:tr.dataset.a; renderScan();});
+[["cProfit","profit"],["cNew","newOnly"],["cWatch","watchOnly"],["cSpike","hideSpike"]].forEach(([id,key])=>{
+  $(id).addEventListener("click",()=>{filters[key]=!filters[key];
+    $(id).setAttribute("aria-pressed",String(filters[key])); renderScan();});});
+["q","minTvl","kind"].forEach(id=>$(id).addEventListener("input",renderScan));
+$("hold").addEventListener("change",load);
+$("refresh").addEventListener("click",load);
+
+/* ============================================================
+   PLAN
+   ============================================================ */
+$("lev").innerHTML=[1,2,3,4,5,6,7,8,9,10].map(i=>`<option value="${i}"${i===2?" selected":""}>${i}x${i===1?" (safest)":""}</option>`).join("");
+const KEYS=["sym","p","budget","wlo","whi","lev","days","thr","fee","refw","fund","otype","hip3","slip","swap","mmr"];
+try{const sv=JSON.parse(localStorage.getItem("dnp")||"null");if(sv)KEYS.forEach(k=>{if(sv[k]!==undefined&&sv[k]!=="")$(k).value=sv[k];});}catch(e){}
+
+function run(){
+  const S=($("sym").value||"TOKEN").trim().toUpperCase();
+  const P=+$("p").value, B=+$("budget").value, D=Math.max(1,Math.round(+$("days").value)||1);
+  const lev=Math.max(1,Math.min(10,+$("lev").value||2));
+  const lo=+$("wlo").value/100, hi=+$("whi").value/100;
+  const feeRead=+$("fee").value/100, fundDay=+$("fund").value/100;
+  const refwRaw=parseFloat($("refw").value);
+  const hlFee=($("otype").value==="taker"?0.00045:0.00015)*($("hip3").value==="1"?2:1);
+  const perpFee=hlFee+(+$("slip").value||0)/100, swapFee=+$("swap").value/100, mmr=Math.max(0.005,+$("mmr").value/100);
+  try{localStorage.setItem("dnp",JSON.stringify(Object.fromEntries(KEYS.map(k=>[k,$(k).value]))));}catch(e){}
+  $("dlabel").textContent=D;
+  if(!(P>0&&B>0&&lo>0&&lo<0.99&&hi>0)){$("kpis").innerHTML="";$("steps").innerHTML="";$("band").innerHTML='<p class="band bad">Enter a price, an amount and a range above zero.</p>';$("scen").innerHTML="";$("ladder").innerHTML="";$("driftnote").textContent="";return;}
+
+  const Pa=P*(1-lo), Pb=P*(1+hi);
+  const u=lpAt(1,Pa,Pb,P), Lper=1/u.val, xPer=u.x*Lper;
+  const refw=(refwRaw>0&&refwRaw<95)?refwRaw/100:null;
+  const concRef=refw?lPerDollar(P,refw):Lper;
+  const feeDay=feeRead*(Lper/concRef);
+  const V=B/(1+xPer*P/lev);
+  const L=V*Lper, s0=lpAt(L,Pa,Pb,P);
+  const h=s0.x, notional=h*P, M=notional/lev;
+  const tokenPct=s0.x*P/V, liq=(P+M/h)/(1+mmr);
+  const feeUsdDay=V*feeDay, fundUsdDay=notional*fundDay;
+  const openCost=s0.x*P*swapFee+notional*perpFee, closeCost=notional*perpFee;
+  const scaled=refw&&Math.abs(feeDay-feeRead)>1e-9;
+
+  $("kpis").innerHTML=[
+    ["Into the LP",usd(V),""],
+    ["Margin on the perp",usd(M),""],
+    ["Deposit split",pct(tokenPct,0)+" "+S,""],
+    ["Fees per day",usd(feeUsdDay)+(scaled?" · "+pct(feeDay,2)+"/day":""),"gain"],
+    ["Funding per day",usd(fundUsdDay),fundUsdDay>=0?"gain":"loss"],
+    ["If price stays flat",usd(feeUsdDay+fundUsdDay),"gain"]
+  ].map(([k,v,c])=>`<div class="kpi"><div class="v mono ${c}">${v}</div><div class="k">${k}</div></div>`).join("");
+  $("splitbar").innerHTML=`<i class="a" style="width:${V/B*100}%"></i><i class="b" style="width:${M/B*100}%"></i>`;
+  $("legend").innerHTML=`<span><b style="background:var(--lp)"></b>LP ${usd(V)}</span><span><b style="background:var(--loss)"></b>Margin ${usd(M)}</span><span>Total ${usd(B)}</span>`;
+
+  $("steps").innerHTML=[
+    [`Swap ${usd(s0.x*P)} into ${tok(s0.x)} ${S}`,`Keep ${usd(s0.y)} as USDC. The pool wants ${pct(tokenPct,0)} ${S} / ${pct(1-tokenPct,0)} USDC at this range, not an even split. Swap cost ≈ ${usd(s0.x*P*swapFee)}.`],
+    [`Add liquidity ${px(Pa)} – ${px(Pb)}`,`−${pct(lo,0)} / +${pct(hi,0)} around ${px(P)}. Position value ${usd(V)}, earning ≈ ${usd(feeUsdDay)}/day while in range${scaled?` — ${pct(feeDay,2)}/day, scaled from your ${pct(feeRead,2)} reading at ±${pct(refw,0)}`:""}.`],
+    [`Deposit ${usd(M)} margin and short ${tok(h)} ${S} (${usd(notional)})`,`${lev}x. Fee ${pct(hlFee,3)} ≈ ${usd(notional*perpFee)} each way. Liquidation ≈ ${px(liq)} (+${((liq/P-1)*100).toFixed(0)}%).`],
+    [`Leave it for ${D} days, then close both`,`Withdraw the LP and close the short together. Round-trip costs ≈ ${usd(openCost+closeCost)}.`]
+  ].map(([a,b])=>`<li><div><b>${a}</b><small>${b}</small></div></li>`).join("");
+  $("warn").textContent = liq<Pb ? `At ${lev}x the short is liquidated at ${px(liq)}, which is inside your range — the hedge dies before the price even leaves the top. Use lower leverage.` : "";
+
+  const vlo=Math.min(Pa,P*0.5), vhi=Math.max(Pb,P*1.5), pos=v=>(v-vlo)/(vhi-vlo)*100;
+  $("track").innerHTML=`<div class="in" style="left:${pos(Pa)}%;width:${pos(Pb)-pos(Pa)}%"></div><div class="now" style="left:${pos(P)}%"></div>
+    <span style="left:${pos(Pa)}%;transform:translateX(4px)">${px(Pa)}</span><span style="right:${100-pos(Pb)}%;transform:translateX(-4px)">${px(Pb)}</span>`;
+
+  const thr=Math.min(1,Math.max(0.05,(+$("thr").value||25)/100));
+  const tokensAt=pe=>lpAt(L,Pa,Pb,pe).x;
+  const xAtPa=tokensAt(Pa);
+  const findPrice=target=>{
+    if(target>=xAtPa) return Pa;
+    if(target<=0) return Pb;
+    let a=Pa,b=Pb;
+    for(let i=0;i<80;i++){const m=(a+b)/2; if(tokensAt(m)>target) a=m; else b=m;}
+    return (a+b)/2;
+  };
+  const rungs=[];
+  for(let n=4;n>=1;n--){const t=h*(1+thr*n); if(t<xAtPa*0.999) rungs.push({pe:findPrice(t),target:t});}
+  rungs.push({pe:P,target:h,now:true});
+  for(let n=1;n<=4;n++){const t=h*(1-thr*n); if(t>h*0.02) rungs.push({pe:findPrice(t),target:t});}
+  rungs.sort((a,b)=>b.pe-a.pe);
+  const mvDn=(()=>{const t=h*(1+thr); return t<xAtPa?Math.abs(findPrice(t)/P-1):null;})();
+  const mvUp=Math.abs(findPrice(h*(1-thr))/P-1);
+  $("driftnote").innerHTML=`Your short matches the LP exactly at ${px(P)} and nowhere else. The LP buys ${S} as the price falls and sells it as the price rises, so the hedge goes stale on its own. At this range it is ${pct(thr,0)} out of line after a move of roughly <b>${mvDn!==null?(mvDn*100).toFixed(1)+"% down":"—"}</b> or <b>${(mvUp*100).toFixed(1)}% up</b>. Adjust the short at these prices to stay neutral, or leave it and accept the outcome table below as what you signed up for.`;
+  $("ladder").innerHTML=`<tr><th>${S} price</th><th>Move</th><th>LP holds</th><th>Short should be</th><th>Action</th></tr>`+
+    rungs.map(r=>{const d=r.target-h;
+      return `<tr class="${r.now?"flat":""}"><td class="mono">${px(r.pe)}</td><td class="mono">${r.now?"now":(r.pe>P?"+":"")+((r.pe/P-1)*100).toFixed(1)+"%"}</td>
+      <td class="mono">${tok(r.target)}</td><td class="mono">${tok(r.target)} ${S}</td>
+      <td class="mono ${r.now?"":d>0?"loss":"gain"}">${r.now?"opened here":d>0?"short "+tok(d)+" more":"close "+tok(-d)}</td></tr>`;}).join("");
+
+  const net=pe=>{
+    const s=lpAt(L,Pa,Pb,pe), lp=s.val-V;
+    const sh=Math.max(h*(P-pe),-M);
+    const inR=pe>Pa&&pe<Pb, mv=Math.abs(pe/P-1), share=inR?1:Math.min(0.5,((lo+hi)/2)/Math.max(mv,1e-6));
+    const fe=feeUsdDay*D*share, fu=fundUsdDay*D*(inR?1:0.75);
+    return {lp,sh,fe:fe+fu,total:lp+sh+fe+fu-openCost-closeCost,liq:pe>=liq};
+  };
+  const moves=[...new Set([-0.5,-0.3,-lo,-0.15,0,0.15,hi,0.3,0.5,1].map(m=>+m.toFixed(4)))].sort((a,b)=>a-b).filter(m=>m>-0.95);
+  $("scen").innerHTML=`<tr><th>${S} ends at</th><th>Hedge off by</th><th>LP</th><th>Short</th><th>Fees + funding</th><th>Net</th></tr>`+
+    moves.map(m=>{const pe=P*(1+m), o=net(pe), dr=(lpAt(L,Pa,Pb,pe).x-h)/h;
+      return `<tr class="${m===0?"flat":""}"><td>${m>0?"+":""}${(m*100).toFixed(0)}% · ${px(pe)}</td>
+        <td class="mono ${Math.abs(dr)>0.5?"loss":""}">${dr>0?"+":""}${(dr*100).toFixed(0)}%</td>
+        <td class="mono ${cls(o.lp)}">${usd(o.lp)}</td>
+        <td class="mono ${cls(o.sh)}">${usd(o.sh)}${o.liq?" *":""}</td><td class="mono gain">${usd(o.fe)}</td>
+        <td class="mono ${cls(o.total)}"><b>${usd(o.total)}</b></td></tr>`;}).join("")+
+    (net(P*1.5).liq?`<tr><td colspan="6" class="mono" style="text-align:left;color:var(--mute)">* short liquidated at that price; the margin is gone</td></tr>`:"");
+
+  let blo=null,bhi=null;
+  for(let i=0;i<=600;i++){const pe=P*(0.2+i*0.005); if(net(pe).total>=0){if(blo===null)blo=pe;bhi=pe;}}
+  $("band").innerHTML=blo===null
+    ? `<p class="band bad">Loses money at every end price. At ${pct(feeDay,2)}/day this range doesn't pay for the drift plus costs — widen the range, find a better-paying pool, or don't open it.</p>`
+    : `<p class="band">Profitable if ${S} ends between <b>${px(blo)}</b> and <b>${px(bhi)}</b> — that's <b>${((blo/P-1)*100).toFixed(0)}%</b> to <b>+${((bhi/P-1)*100).toFixed(0)}%</b> over ${D} days. Best case is the price barely moving: ${usd(net(P).total)}.</p>`;
+}
+document.querySelectorAll("#view-plan input,#view-plan select").forEach(el=>el.addEventListener("input",run));
+
+/* ============ boot ============ */
+showTab(LS("dnd-tab","scan"));
+run();
+load();
+</script>
+</body>
+</html>
