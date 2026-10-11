@@ -388,7 +388,7 @@ function score(pool,ds,tfKey,holdDays){
   let earns=null,needs=null,netDay=null;
   if(width&&price>0&&sigma!==null){
     const lp=lPerDollar(price,width);
-    if(basis==="liquidity"){earns=feePerL*lp;needs=costPerL*lp;}
+    if(basis==="liquidity"){earns=feePerL*lp/qUsd;needs=costPerL*lp/qUsd;}
     else{const k=lp/lPerDollar(price,0.5);earns=yTvl*k;needs=((sigma*sigma)/8)*k;}
     netDay=earns-needs;
   }
