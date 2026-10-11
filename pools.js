@@ -36,15 +36,15 @@ async function getPage(url) {
   };
 }
 
-async function crawl({ size = 500, maxPages = 40, minTvl = 0 } = {}) {
-  const base = `${ORCA}?size=${size}&stats=${ALL_PERIODS}&sortBy=tvl&sortDirection=desc${minTvl ? `&minTvl=${minTvl}` : ""}`;
-  const seen = new Map(), log = [];
+async function sweep(seen, log, label, dir, { size, maxPages, minTvl }) {
+  const base = `${ORCA}?size=${size}&stats=${ALL_PERIODS}&sortBy=tvl&sortDirection=${dir}${minTvl ? `&minTvl=${minTvl}` : ""}`;
   let cursorKey = null;
-
   const first = await getPage(base);
+  const before0 = seen.size;
   first.pools.forEach(p => p?.address && seen.set(p.address, p));
-  log.push({ page: 1, got: first.pools.length, total: seen.size, envelope: first.envelope,
-             metaKeys: first.metaKeys, statsPeriods: Object.keys(first.pools[0]?.stats || {}) });
+  log.push({ sweep: label, page: 1, got: first.pools.length, added: seen.size - before0,
+             total: seen.size, envelope: first.envelope, metaKeys: first.metaKeys,
+             statsPeriods: Object.keys(first.pools[0]?.stats || {}) });
 
   let next = first.next;
   for (let page = 2; page <= maxPages && next; page++) {
@@ -54,13 +54,25 @@ async function crawl({ size = 500, maxPages = 40, minTvl = 0 } = {}) {
       try { pg = await getPage(`${base}&${k}=${encodeURIComponent(next)}`); } catch { continue; }
       const before = seen.size;
       pg.pools.forEach(p => p?.address && seen.set(p.address, p));
-      if (seen.size > before) {
+      if (pg.pools.length) {
         cursorKey = k; advanced = true; next = pg.next;
-        log.push({ page, key: k, got: pg.pools.length, added: seen.size - before, total: seen.size });
+        log.push({ sweep: label, page, key: k, got: pg.pools.length, added: seen.size - before, total: seen.size });
         break;
       }
     }
-    if (!advanced) { log.push({ page, stopped: "no new pools from any cursor key" }); break; }
+    if (!advanced) { log.push({ sweep: label, page, stopped: "cursor did not advance", nextSeen: next ? String(next).slice(0,24) : null }); break; }
+  }
+  return cursorKey;
+}
+
+// Sorting by TVL descending puts the smallest pools last, so a single page silently drops
+// them. Sweep from both ends and merge, in case the cursor stops working.
+async function crawl({ size = 1000, maxPages = 40, minTvl = 0 } = {}) {
+  const seen = new Map(), log = [];
+  let cursorKey = null;
+  for (const [label, dir] of [["largest first", "desc"], ["smallest first", "asc"]]) {
+    try { cursorKey = (await sweep(seen, log, label, dir, { size, maxPages, minTvl })) || cursorKey; }
+    catch (e) { log.push({ sweep: label, error: String(e.message || e) }); }
   }
   return { pools: [...seen.values()], log, cursorKey };
 }
@@ -135,7 +147,7 @@ function quoteUsd(pool, price) {
   return Number.isFinite(q) && q > 0 ? q : null;
 }
 
-function score(pool, ds, tfKey, holdDays) {
+function score(pool, ds, tfKey, holdDays, posUsd = 1000) {
   const stats = pool.stats || {};
   const tvl = num(pool.tvlUsdc), price = num(pool.price);
   const s24 = stats["24h"] || {}, s7 = stats["7d"] || {}, s30 = stats["30d"] || {};
@@ -179,18 +191,26 @@ function score(pool, ds, tfKey, holdDays) {
   }
 
   const width = sigma !== null ? Math.max(0.08, Math.min(0.85, 1.5 * sigma * Math.sqrt(holdDays))) : null;
-  let earns = null, needs = null, netDay = null;
+  let earns = null, needs = null, netDay = null, share = null, conc = null;
   if (width && price > 0 && sigma !== null) {
     const lp = lPerDollar(price, width);
     if (basis === "liquidity") {
-      // lp is liquidity per ONE QUOTE TOKEN of position value, not per dollar, so both
-      // sides divide by the quote token's dollar price to become a yield on dollars.
-      earns = feePerL * lp / qUsd; needs = costPerL * lp / qUsd;
+      // lp is liquidity per ONE QUOTE TOKEN of position value, so dividing by the quote
+      // token's dollar price turns both sides into a yield on dollars.
+      needs = costPerL * lp / qUsd;
+      // Your own deposit joins the active liquidity and dilutes the fee per unit, which
+      // matters enormously in a small pool. Model the share you would actually hold.
+      const Lme = (posUsd / qUsd) * lp;
+      share = L && L > 0 ? Lme / (L + Lme) : 1;
+      earns = (feesPerDay * share) / posUsd;
     } else {
-      const k = lp / lPerDollar(price, 0.5);                    // full-range-equivalent scaling
-      earns = yTvl * k; needs = ((sigma * sigma) / 8) * k;
+      const k = lp / lPerDollar(price, 0.5);
+      needs = ((sigma * sigma) / 8) * k;
+      share = tvl > 0 ? posUsd / (tvl + posUsd) : 1;
+      earns = yTvl * k * (tvl > 0 ? tvl / (tvl + posUsd) : 1);
     }
     netDay = earns - needs;
+    conc = yTvl > 0 ? earns / yTvl : null;   // how much better than the pool average
   }
 
   const y24 = tvl > 0 ? num(s24.fees) / tvl : 0;
@@ -213,6 +233,7 @@ function score(pool, ds, tfKey, holdDays) {
     trend: (y7 > 0 && y30 > 0) ? y7 / y30 : null,
     spike: (y7 > 0 && y24 > 3 * y7),
     sigma, sigmaSrc, created, ageDays,
+    poolAvg: yTvl, share, conc, posUsd,
     edge, edgeTvl, basis, width, earns, needs, netDay,
     netPer1k: netDay !== null ? netDay * 1000 : null,
     dsUrl: ds?.url || null, onDs: !!ds
@@ -224,9 +245,10 @@ module.exports = async (req, res) => {
   res.setHeader("cache-control", "s-maxage=120, stale-while-revalidate=600");
   try {
     const hold = Math.max(1, Math.min(365, num(q.hold) || 30));
+    const pos = Math.max(1, Math.min(1e7, num(q.pos) || 1000));
     const tfKey = PERIOD_HOURS[q.tf] ? q.tf : "24h";
     const { pools: raw, log, cursorKey } = await crawl({
-      size: Math.max(50, Math.min(1000, num(q.size) || 500)),
+      size: Math.max(50, Math.min(1000, num(q.size) || 1000)),
       maxPages: Math.max(1, Math.min(60, num(q.maxPages) || 40)),
       minTvl: num(q.minTvl) || 0
     });
@@ -242,15 +264,15 @@ module.exports = async (req, res) => {
         periodsRequested: ALL_PERIODS,
         dexscreenerMatched: dsMap.size,
         timeframe: tfKey,
-        firstPool: a, scored: score(a, dsMap.get(a.address), tfKey, hold)
+        firstPool: a, scored: score(a, dsMap.get(a.address), tfKey, hold, pos)
       });
     }
 
-    const pools = raw.map(p => score(p, dsMap.get(p.address), tfKey, hold)).filter(p => !p.stablePair);
+    const pools = raw.map(p => score(p, dsMap.get(p.address), tfKey, hold, pos)).filter(p => !p.stablePair);
     pools.sort((a, b) => (b.netDay ?? -1e9) - (a.netDay ?? -1e9));
     res.json({
       at: Date.now(), scanned: raw.length, returned: pools.length, cursorKey,
-      pages: log.length, timeframe: tfKey,
+      pages: log.length, timeframe: tfKey, positionUsd: pos,
       periodsAvailable: Object.keys(raw[0]?.stats || {}),
       dexscreenerMatched: dsMap.size, pools
     });
