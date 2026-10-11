@@ -183,7 +183,9 @@ function score(pool, ds, tfKey, holdDays) {
   if (width && price > 0 && sigma !== null) {
     const lp = lPerDollar(price, width);
     if (basis === "liquidity") {
-      earns = feePerL * lp; needs = costPerL * lp;
+      // lp is liquidity per ONE QUOTE TOKEN of position value, not per dollar, so both
+      // sides divide by the quote token's dollar price to become a yield on dollars.
+      earns = feePerL * lp / qUsd; needs = costPerL * lp / qUsd;
     } else {
       const k = lp / lPerDollar(price, 0.5);                    // full-range-equivalent scaling
       earns = yTvl * k; needs = ((sigma * sigma) / 8) * k;
