@@ -25,8 +25,8 @@ function build({quotePriceUsd, basePriceUsd, tvlUsd, fees24, sigma}) {
   };
 }
 const args = { basePriceUsd: 112.3, tvlUsd: 3400232, fees24: 5940, sigma: 0.028 };
-const inUsdc = _test.score(build({...args, quotePriceUsd: 1}), null, "24h", 30);
-const inZec  = _test.score(build({...args, quotePriceUsd: 1282.0592}), null, "24h", 30);
+const inUsdc = _test.score(build({...args, quotePriceUsd: 1}), null, "24h", 30, 1000);
+const inZec  = _test.score(build({...args, quotePriceUsd: 1282.0592}), null, "24h", 30, 1000);
 
 console.log("\nQuote-token invariance (the bug that inflated SOL- and ZEC-quoted pools)");
 ok("USDC-quoted pool stays on the liquidity basis", inUsdc.basis === "liquidity", inUsdc.basis);
@@ -72,6 +72,16 @@ p.stats["30m"] = { volume:"77000", fees:"123" };
 ok("uses the requested period when present", _test.score(p,null,"30m",30).usedPeriod === "30m");
 ok("falls back to 24h when absent", _test.score(p,null,"4h",30).usedPeriod === "24h");
 ok("flags the fallback", _test.score(p,null,"4h",30).haveTf === false);
+
+console.log("\nDilution: your own deposit lowers the yield, and can never beat all the fees");
+const small = build({ basePriceUsd: 0.5, tvlUsd: 26526, fees24: 601, sigma: 0.016, quotePriceUsd: 1 });
+const sizes = [100, 1000, 10000, 100000].map(v => _test.score(small, null, "24h", 30, v));
+ok("yield falls as the position grows", sizes.every((r,i) => i===0 || r.earns <= sizes[i-1].earns),
+   sizes.map(r => (r.earns*100).toFixed(2)+"%").join(" > "));
+ok("share of liquidity rises with size", sizes.every((r,i) => i===0 || r.share >= sizes[i-1].share),
+   sizes.map(r => (r.share*100).toFixed(1)+"%").join(" < "));
+ok("never exceeds the whole pool's fees", sizes.every((r,i) => r.earns <= 601/[100,1000,10000,100000][i] + 1e-9));
+ok("pool average matches fees/TVL", close(sizes[1].poolAvg, 601/26526), (sizes[1].poolAvg*100).toFixed(3)+"%/day");
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 process.exit(fails ? 1 : 0);
