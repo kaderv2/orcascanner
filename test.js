@@ -83,5 +83,33 @@ ok("share of liquidity rises with size", sizes.every((r,i) => i===0 || r.share >
 ok("never exceeds the whole pool's fees", sizes.every((r,i) => r.earns <= 601/[100,1000,10000,100000][i] + 1e-9));
 ok("pool average matches fees/TVL", close(sizes[1].poolAvg, 601/26526), (sizes[1].poolAvg*100).toFixed(3)+"%/day");
 
+console.log("\nOrca v2 cursor");
+ok("reads meta.cursor.next", _test.nextCursor({meta:{cursor:{previous:null,next:"abc"}}}) === "abc");
+ok("falls back to meta.next", _test.nextCursor({meta:{next:"old"}}) === "old");
+ok("null when there is no next page", _test.nextCursor({data:[],meta:{cursor:{previous:"p",next:null}}}) === null);
+
+console.log("\nEffective fee rate: base + adaptive surcharge, never 0 when the base is not");
+const af = (cur, max=100000) => ({adaptiveFeeEnabled:true, adaptiveFee:{currentRate:cur,maxRate:max,constants:{},variables:{}}});
+ok("adaptive currentRate 0 keeps the base", _test.effectiveFeeRate({feeRate:1600,...af(0)}).total === 1600);
+ok("adaptive surcharge is added", _test.effectiveFeeRate({feeRate:400,...af(28)}).total === 428);
+ok("surcharge capped at maxRate", _test.effectiveFeeRate({feeRate:100,...af(9000,6970)}).total === 7070);
+ok("adaptiveFee null -> base only", _test.effectiveFeeRate({feeRate:3000,adaptiveFeeEnabled:false,adaptiveFee:null}).total === 3000);
+ok("scored feeRate is a percent of the effective rate",
+   close(_test.score({...build({...args,quotePriceUsd:1}),...af(0)},null,"24h",30).feeRate, 0.16, 1e-9));
+
+console.log("\nThin-pool gates");
+const good = _test.score(build({...args,quotePriceUsd:1}), null, "24h", 30);
+ok("big, busy, week-old pool passes", _test.thinReasons(good, build({...args,quotePriceUsd:1})).length === 0,
+   _test.thinReasons(good, build({...args,quotePriceUsd:1})).join("; "));
+const tiny = build({ basePriceUsd: 0.5, tvlUsd: 26526, fees24: 30, sigma: 0.016, quotePriceUsd: 1 });
+const why = _test.thinReasons(_test.score(tiny,null,"24h",30), tiny);
+ok("small pool flagged for TVL and volume", why.includes("tvl<250000") && why.includes("vol24<50000"), why.join("; "));
+const young = {...build({...args,quotePriceUsd:1})}; young.priceHistory7d = [null,null,null,null,null,null,null,null, ...young.priceHistory7d.slice(8)];
+const whyY = _test.thinReasons(_test.score(young,null,"24h",30), young);
+ok("young pool flagged for age", whyY.some(r => r.startsWith("age ")), whyY.join("; "));
+const zero = {...build({...args,quotePriceUsd:1}), feeRate:0};
+ok("fee 0 pool flagged", _test.thinReasons(_test.score(zero,null,"24h",30), zero).includes("fee 0"));
+ok("gates can be switched off", _test.thinReasons(_test.score(tiny,null,"24h",30), tiny, {minTvl:0,minVol24:0,minAgeDays:0}).length === 0);
+
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 process.exit(fails ? 1 : 0);

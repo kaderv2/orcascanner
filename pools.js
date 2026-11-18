@@ -1,11 +1,17 @@
-// GET /api/pools          -> every Orca Whirlpool, scored and ranked
+// GET /api/pools          -> every Orca Whirlpool, scored and ranked (thin pools excluded)
 // GET /api/pools?debug=1  -> crawl log, which stats periods arrived, raw first pool + its score
 //
+// Query: hold, pos, tf, size, maxPages (total page budget), crawlMinTvl (dust floor sent to Orca, default 1000),
+//        minTvl=250000, minVol24=50000, minAgeDays=7 -> pools below any of these, or with an effective fee of 0,
+//        are flagged thin:true + thinReason and left out of the ranking unless includeThin=1.
+//
 // Orca   https://api.orca.so/v2/solana/pools
-//        params: size, next (cursor from meta.next), sortBy, sortDirection, minTvl,
-//                stats=<comma list from 5m,15m,30m,1h,2h,4h,8h,24h,7d,30d>
+//        params: size, next (cursor from meta.cursor.next; "after" also works, "cursor"/"page" are ignored),
+//                sortBy, sortDirection, minTvl, stats=<comma list from 5m,15m,30m,1h,2h,4h,8h,24h,7d,30d>
+//        meta:   { cursor: { previous, next } }
 //        pool:   { address, liquidity, price (tokenB per tokenA), tvlUsdc, feeRate,
-//                  tokenBalanceA/B (RAW integers), adaptiveFeeEnabled, adaptiveFee:{currentRate},
+//                  tokenBalanceA/B (RAW integers), adaptiveFeeEnabled,
+//                  adaptiveFee:{currentRate,maxRate,constants:{...},variables:{...}} | null,
 //                  tokenA:{symbol,address,decimals}, tokenB:{...},
 //                  stats:{ "<period>":{volume,fees,...} }, priceHistory7d:[ "decimal"|null x14 ] }
 // DexScreener  used only for exact pool age and the chart link, never for fees.
@@ -22,7 +28,12 @@ const PERIOD_HOURS = { "5m":1/12, "15m":0.25, "30m":0.5, "1h":1, "2h":2, "4h":4,
 const ALL_PERIODS = Object.keys(PERIOD_HOURS).join(",");
 
 /* ---------------- Orca crawl ---------------- */
+// Query parameter that carries the cursor. Verified against the live API: "next" and "after" both
+// advance; "cursor" and "page" are silently ignored and return page 1 again.
 const CURSOR_KEYS = ["next", "after", "cursor", "page"];
+
+// Orca v2 returns the cursor in meta.cursor.next; older shapes are kept as fallbacks.
+const nextCursor = j => j?.meta?.cursor?.next ?? j?.meta?.next ?? j?.cursor?.next ?? j?.next ?? null;
 
 async function getPage(url) {
   const r = await fetch(url, { headers: { accept: "application/json" } });
@@ -30,51 +41,66 @@ async function getPage(url) {
   const j = await r.json();
   return {
     pools: Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [],
-    next: j?.meta?.next ?? j?.next ?? null,
+    next: nextCursor(j),
     envelope: Object.keys(j || {}),
     metaKeys: j?.meta ? Object.keys(j.meta) : null
   };
 }
 
-async function sweep(seen, log, label, dir, { size, maxPages, minTvl }) {
-  const base = `${ORCA}?size=${size}&stats=${ALL_PERIODS}&sortBy=tvl&sortDirection=${dir}${minTvl ? `&minTvl=${minTvl}` : ""}`;
-  let cursorKey = null;
+const addAll = (seen, pools) => {
+  const before = seen.size;
+  for (const p of pools) if (p?.address && !seen.has(p.address)) seen.set(p.address, p);
+  return seen.size - before;
+};
+
+async function sweep(seen, log, label, dir, { size, budget, crawlMinTvl, cursorKey = null }) {
+  const base = `${ORCA}?size=${size}&stats=${ALL_PERIODS}&sortBy=tvl&sortDirection=${dir}${crawlMinTvl ? `&minTvl=${crawlMinTvl}` : ""}`;
   const first = await getPage(base);
-  const before0 = seen.size;
-  first.pools.forEach(p => p?.address && seen.set(p.address, p));
-  log.push({ sweep: label, page: 1, got: first.pools.length, added: seen.size - before0,
+  const added0 = addAll(seen, first.pools);
+  log.push({ sweep: label, page: 1, got: first.pools.length, added: added0,
              total: seen.size, envelope: first.envelope, metaKeys: first.metaKeys,
              statsPeriods: Object.keys(first.pools[0]?.stats || {}) });
 
-  let next = first.next;
-  for (let page = 2; page <= maxPages && next; page++) {
+  let next = first.next, pages = 1, stalled = false;
+  while (next && pages < budget) {
     let advanced = false;
     for (const k of (cursorKey ? [cursorKey] : CURSOR_KEYS)) {
       let pg;
       try { pg = await getPage(`${base}&${k}=${encodeURIComponent(next)}`); } catch { continue; }
-      const before = seen.size;
-      pg.pools.forEach(p => p?.address && seen.set(p.address, p));
-      if (pg.pools.length) {
-        cursorKey = k; advanced = true; next = pg.next;
-        log.push({ sweep: label, page, key: k, got: pg.pools.length, added: seen.size - before, total: seen.size });
+      const added = addAll(seen, pg.pools);
+      // A page with no new addresses means the key was ignored (page 1 again) or the cursor looped.
+      if (pg.pools.length && added > 0) {
+        cursorKey = k; advanced = true; next = pg.next; pages++;
+        log.push({ sweep: label, page: pages, key: k, got: pg.pools.length, added, total: seen.size });
         break;
       }
     }
-    if (!advanced) { log.push({ sweep: label, page, stopped: "cursor did not advance", nextSeen: next ? String(next).slice(0,24) : null }); break; }
+    if (!advanced) {
+      stalled = true;
+      log.push({ sweep: label, page: pages + 1, stopped: "cursor did not advance", nextSeen: String(next).slice(0, 24) });
+      break;
+    }
   }
-  return cursorKey;
+  return { cursorKey, pages, complete: !next, stalled };
 }
 
-// Sorting by TVL descending puts the smallest pools last, so a single page silently drops
-// them. Sweep from both ends and merge, in case the cursor stops working.
-async function crawl({ size = 1000, maxPages = 40, minTvl = 0 } = {}) {
+// Sorted by TVL descending and followed through the cursor until it runs out or the page budget
+// (maxPages, total across sweeps) is spent. Only if the cursor breaks is the smallest-first sweep
+// used to pick up the tail from the other end.
+async function crawl({ size = 1000, maxPages = 40, crawlMinTvl = 0 } = {}) {
   const seen = new Map(), log = [];
-  let cursorKey = null;
+  let cursorKey = null, pages = 0, complete = false;
   for (const [label, dir] of [["largest first", "desc"], ["smallest first", "asc"]]) {
-    try { cursorKey = (await sweep(seen, log, label, dir, { size, maxPages, minTvl })) || cursorKey; }
-    catch (e) { log.push({ sweep: label, error: String(e.message || e) }); }
+    const budget = maxPages - pages;
+    if (budget < 1) break;
+    try {
+      const r = await sweep(seen, log, label, dir, { size, budget, crawlMinTvl, cursorKey });
+      cursorKey = r.cursorKey || cursorKey; pages += r.pages;
+      if (r.complete) complete = true;
+      if (!r.stalled) break;          // finished or out of budget: the other end adds nothing new
+    } catch (e) { log.push({ sweep: label, error: String(e.message || e) }); }
   }
-  return { pools: [...seen.values()], log, cursorKey };
+  return { pools: [...seen.values()], log, cursorKey, pages, complete };
 }
 
 /* ---------------- DexScreener: age and link only ---------------- */
@@ -147,6 +173,34 @@ function quoteUsd(pool, price) {
   return Number.isFinite(q) && q > 0 ? q : null;
 }
 
+// Orca v2 rates are in hundredths of a basis point (1e6 = 100%). feeRate is the static base fee;
+// adaptiveFee.currentRate is only the variable surcharge (often 0), capped by adaptiveFee.maxRate.
+// Effective = base + variable, under the program's 10% hard limit — never 0 while the base is > 0.
+const FEE_RATE_HARD_LIMIT = 100000;
+function effectiveFeeRate(pool) {
+  const base = Math.max(0, num(pool?.feeRate));
+  const af = pool?.adaptiveFeeEnabled && pool.adaptiveFee ? pool.adaptiveFee : null;
+  let variable = af ? Math.max(0, num(af.currentRate)) : 0;
+  if (af && num(af.maxRate) > 0) variable = Math.min(variable, num(af.maxRate));
+  return { base, variable, total: Math.min(base + variable, FEE_RATE_HARD_LIMIT) };
+}
+
+// A full 7-day series (no empty leading slots) proves the pool is at least about a week old.
+const fullHistory = s => Array.isArray(s) && s.length > 1 && s.every(v => num(v) > 0);
+
+// Why a scored pool is too thin to rank; [] when it is fine.
+function thinReasons(s, pool, { minTvl = 250000, minVol24 = 50000, minAgeDays = 7 } = {}) {
+  const r = [];
+  if (!(s.feeRate > 0)) r.push("fee 0");
+  if (s.tvl < minTvl) r.push(`tvl<${minTvl}`);
+  if (s.vol24 < minVol24) r.push(`vol24<${minVol24}`);
+  if (minAgeDays > 0) {
+    if (s.ageDays != null) { if (s.ageDays < minAgeDays) r.push(`age ${s.ageDays.toFixed(1)}d<${minAgeDays}d`); }
+    else if (!(fullHistory(pool?.priceHistory7d) && minAgeDays <= 7)) r.push("age unknown");
+  }
+  return r;
+}
+
 function score(pool, ds, tfKey, holdDays, posUsd = 1000) {
   const stats = pool.stats || {};
   const tvl = num(pool.tvlUsdc), price = num(pool.price);
@@ -169,8 +223,8 @@ function score(pool, ds, tfKey, holdDays, posUsd = 1000) {
   const feesPerDay = num(used.fees) * (24 / useHours);
   const windowVol = num(used.volume);
 
-  const rate = (pool.adaptiveFeeEnabled && pool.adaptiveFee?.currentRate != null
-    ? num(pool.adaptiveFee.currentRate) : num(pool.feeRate)) / 1e6;
+  const fee = effectiveFeeRate(pool);
+  const rate = fee.total / 1e6;
 
   const qUsd = stableB ? 1 : quoteUsd(pool, price);
   const L = humanL(pool.liquidity, A.decimals, B.decimals);
@@ -225,6 +279,8 @@ function score(pool, ds, tfKey, holdDays, posUsd = 1000) {
     bothVolatile: !stableA && !stableB,
     stablePair: stableA && stableB,
     feeRate: rate * 100,
+    feeRateBase: fee.base / 1e4, feeRateAdaptive: fee.variable / 1e4,   // percent
+    feeRateRealized24h: num(s24.volume) > 0 ? (num(s24.fees) / num(s24.volume)) * 100 : null,
     adaptiveFee: !!pool.adaptiveFeeEnabled,
     price, quoteUsd: qUsd, tvl,
     vol24: num(s24.volume), windowVol, haveTf, usedPeriod: useKey,
@@ -240,6 +296,11 @@ function score(pool, ds, tfKey, holdDays, posUsd = 1000) {
   };
 }
 
+// Numeric query param with a default; an explicit 0 is honoured (e.g. minTvl=0 turns that gate off).
+const param = (q, k, def) => (q[k] === undefined || q[k] === "" || !Number.isFinite(parseFloat(q[k])))
+  ? def : Math.max(0, parseFloat(q[k]));
+const flag = v => v === true || v === "1" || v === "true" || v === "yes";
+
 module.exports = async (req, res) => {
   const q = req.query || Object.fromEntries(new URL(req.url, "http://x").searchParams);
   res.setHeader("cache-control", "s-maxage=120, stale-while-revalidate=600");
@@ -247,19 +308,33 @@ module.exports = async (req, res) => {
     const hold = Math.max(1, Math.min(365, num(q.hold) || 30));
     const pos = Math.max(1, Math.min(1e7, num(q.pos) || 1000));
     const tfKey = PERIOD_HOURS[q.tf] ? q.tf : "24h";
-    const { pools: raw, log, cursorKey } = await crawl({
+    const filters = {
+      minTvl: param(q, "minTvl", 250000),
+      minVol24: param(q, "minVol24", 50000),
+      minAgeDays: param(q, "minAgeDays", 7),
+      includeThin: flag(q.includeThin)
+    };
+    const crawlOpts = {
       size: Math.max(50, Math.min(1000, num(q.size) || 1000)),
       maxPages: Math.max(1, Math.min(60, num(q.maxPages) || 40)),
-      minTvl: num(q.minTvl) || 0
-    });
+      // Dust floor applied by Orca itself; tens of thousands of near-empty pools sit below it.
+      crawlMinTvl: param(q, "crawlMinTvl", 1000)
+    };
+    const { pools: raw, log, cursorKey, pages, complete } = await crawl(crawlOpts);
     if (!raw.length) return res.status(502).json({ error: "No pools returned", log });
 
-    const dsMap = q.nods ? new Map() : await enrich(raw.map(p => p.address).filter(Boolean));
+    // DexScreener only matters for pools that can still rank, unless thin ones were asked for too.
+    const isStable = t => STABLE.has((t?.symbol || "").toUpperCase());
+    const mayRank = p => filters.includeThin || (
+      effectiveFeeRate(p).total > 0 && num(p.tvlUsdc) >= filters.minTvl &&
+      num(p.stats?.["24h"]?.volume) >= filters.minVol24 && !(isStable(p.tokenA) && isStable(p.tokenB)));
+    const dsMap = q.nods ? new Map() : await enrich(raw.filter(mayRank).map(p => p.address).filter(Boolean));
+    const crawlInfo = { pages, complete, cursorKey, ...crawlOpts };
 
     if (q.debug) {
       const a = raw[0];
       return res.json({
-        scanned: raw.length, cursorKey, log,
+        scanned: raw.length, cursorKey, crawl: crawlInfo, filters, log,
         statsPeriodsReturned: Object.keys(a?.stats || {}),
         periodsRequested: ALL_PERIODS,
         dexscreenerMatched: dsMap.size,
@@ -268,11 +343,26 @@ module.exports = async (req, res) => {
       });
     }
 
-    const pools = raw.map(p => score(p, dsMap.get(p.address), tfKey, hold, pos)).filter(p => !p.stablePair);
+    const scored = raw.map(p => {
+      const s = score(p, dsMap.get(p.address), tfKey, hold, pos);
+      const why = thinReasons(s, p, filters);
+      s.thin = why.length > 0;
+      s.thinReason = why.length ? why.join("; ") : null;
+      return s;
+    }).filter(p => !p.stablePair);
+    const thinCounts = {};
+    for (const s of scored) if (s.thin) for (const r of s.thinReason.split("; ")) {
+      const k = r.startsWith("age ") && r !== "age unknown" ? `age<${filters.minAgeDays}d` : r;
+      thinCounts[k] = (thinCounts[k] || 0) + 1;
+    }
+    const thin = scored.filter(p => p.thin).length;
+    const pools = filters.includeThin ? scored : scored.filter(p => !p.thin);
     pools.sort((a, b) => (b.netDay ?? -1e9) - (a.netDay ?? -1e9));
     res.json({
       at: Date.now(), scanned: raw.length, returned: pools.length, cursorKey,
-      pages: log.length, timeframe: tfKey, positionUsd: pos,
+      pages, crawl: crawlInfo, filters, thin, thinCounts,
+      feeZero: scored.filter(p => !(p.feeRate > 0)).length,
+      timeframe: tfKey, positionUsd: pos,
       periodsAvailable: Object.keys(raw[0]?.stats || {}),
       dexscreenerMatched: dsMap.size, pools
     });
@@ -280,4 +370,5 @@ module.exports = async (req, res) => {
     res.status(502).json({ error: String(e?.message || e) });
   }
 };
-module.exports._test = { volAndAge, sigmaFromChanges, lPerDollar, humanL, quoteUsd, score, PERIOD_HOURS };
+module.exports._test = { volAndAge, sigmaFromChanges, lPerDollar, humanL, quoteUsd, score, PERIOD_HOURS,
+  nextCursor, effectiveFeeRate, thinReasons, fullHistory };

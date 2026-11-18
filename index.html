@@ -372,8 +372,10 @@ function score(pool,ds,tfKey,holdDays,posUsd){
   const feesPerDay=num(used.fees)*(24/useHours);
   const windowVol=num(used.volume);
 
-  const rate=(pool.adaptiveFeeEnabled&&pool.adaptiveFee?.currentRate!=null
-    ?num(pool.adaptiveFee.currentRate):num(pool.feeRate))/1e6;
+  // Effective fee rate = base feeRate + adaptive volatility surcharge (if enabled).
+  const baseFee=num(pool.feeRate);
+  const adaptiveFee=(pool.adaptiveFeeEnabled&&pool.adaptiveFee?.currentRate!=null)?num(pool.adaptiveFee.currentRate):0;
+  const rate=(baseFee+adaptiveFee)/1e6;
 
   const qUsd=sb?1:quoteUsd(pool,price);
   const L=humanL(pool.liquidity,A.decimals,B.decimals);
@@ -442,7 +444,7 @@ async function load(){
   const hold=+$("hold").value||30, tf=$("tf").value||"24h", pos=Math.max(1,+$("pos").value||1000);
   try{
     let data=null;
-    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&pos=${pos}&minTvl=0`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
+    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&pos=${pos}`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
     if(!data){
       const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&stats=5m,15m,30m,1h,2h,4h,8h,24h,7d,30d&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
       if(!r.ok) throw new Error("Orca returned "+r.status);
