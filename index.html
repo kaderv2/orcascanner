@@ -70,6 +70,12 @@ section[hidden]{display:none}
 .dcell .v{font-weight:700}
 .dcell .k{font-size:.69rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
 .verdict{font-size:.92rem;margin:0 0 8px}
+.ptable{width:100%;border-collapse:collapse;margin:8px 0 10px;font-size:.82rem;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ptable th,.ptable td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.ptable th{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);position:static;cursor:default}
+.ptable th:first-child,.ptable td:first-child{text-align:left}
+.ptable tr:last-child td{border-bottom:0}
+.disclaimer{font-size:.8rem;color:var(--mute);margin:8px 0 0}
 .foot{margin-top:16px;color:var(--mute);font-size:.85rem;max-width:78ch}
 
 /* ---------- plan ---------- */
@@ -95,16 +101,17 @@ section[hidden]{display:none}
 .steps li::before{content:counter(s);display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:.78rem}
 .steps b{display:block}.steps small{color:var(--mute)}
 .splitbar{display:flex;height:11px;border-radius:6px;overflow:hidden;background:var(--line);margin:4px 0 8px}
-.splitbar i{display:block}.splitbar .a{background:var(--lp)}.splitbar .b{background:var(--loss);opacity:.8}
+.splitbar i{display:block}.splitbar .a{background:var(--lp)}.splitbar .b{background:var(--loss);opacity:.8}.splitbar .c{background:var(--accent)}.splitbar .d{background:var(--mute);opacity:.7}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.8rem;color:var(--mute)}
 .legend b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
 .band{background:var(--accent-soft);border-radius:10px;padding:9px 11px;font-size:.9rem;margin:0 0 12px}
 .band.bad{background:rgba(178,58,58,.12);color:var(--loss)}
-#view-plan table{border-collapse:collapse;width:100%;font-size:.85rem}
-#view-plan th,#view-plan td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-#view-plan th{font-size:.7rem;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
-#view-plan th:first-child,#view-plan td:first-child{text-align:left}
-#view-plan tr.flat td{background:var(--accent-soft)}
+#view-plan table,#view-calc table{border-collapse:collapse;width:100%;font-size:.85rem}
+#view-plan th,#view-plan td,#view-calc th,#view-calc td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+#view-plan th,#view-calc th{font-size:.7rem;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
+#view-plan th:first-child,#view-plan td:first-child,#view-calc th:first-child,#view-calc td:first-child{text-align:left}
+#view-plan tr.flat td,#view-calc tr.cheapest td{background:var(--accent-soft)}
+.tag.ok{background:rgba(19,122,85,.15);color:var(--gain)}
 .warn{color:var(--loss);font-size:.85rem;margin:8px 0 0}
 .fromscan{background:var(--new-soft);color:var(--new);border-radius:10px;padding:8px 11px;font-size:.86rem;margin:0 0 12px;font-weight:600}
 </style>
@@ -116,6 +123,7 @@ section[hidden]{display:none}
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-scan" aria-selected="true">Find a pool</button>
       <button role="tab" id="tab-plan" aria-selected="false">Plan a position</button>
+      <button role="tab" id="tab-calc" aria-selected="false">Calculadora</button>
     </div>
   </div>
 
@@ -130,6 +138,7 @@ section[hidden]{display:none}
     <label>Rank by<select id="rank">
       <option value="netDay" selected>Net yield per day</option>
       <option value="edge">Edge (safety margin)</option>
+      <option value="minPosUsd">Min position ($)</option>
       <option value="ageDays">Newest first</option>
       <option value="earns">Fee yield per day</option>
       <option value="tvl">TVL</option>
@@ -139,7 +148,10 @@ section[hidden]{display:none}
     </select></label>
     <label>Search<input id="q" type="text" placeholder="ZEC, SOL…" spellcheck="false"></label>
     <label>Min TVL ($)<input id="minTvl" type="number" value="0" step="25000"></label>
-    <label>Your position ($)<input id="pos" type="number" value="1000" step="500" min="1"></label>
+    <label>Position ($)<input id="pos" type="number" value="1000" step="100" min="1"></label>
+    <label>Hold (days)<input id="hold" type="number" value="30" step="1" min="1" max="365"></label>
+    <label>Perp taker (%/side)<input id="perpTakerFee" type="number" value="0.05" step="0.01" min="0"></label>
+    <label>Funding/day (%)<input id="perpFundingDaily" type="number" value="0.01" step="0.005"></label>
     <label>Fee window<select id="tf">
       <option value="5m">5 minutes</option>
       <option value="15m">15 minutes</option>
@@ -152,7 +164,6 @@ section[hidden]{display:none}
       <option value="7d">7 days</option>
       <option value="30d">30 days</option>
     </select></label>
-    <label>Hold for<select id="hold"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
     <label>Pairs<select id="kind">
       <option value="all" selected>All pairs</option>
       <option value="stable">Token / stablecoin only</option>
@@ -177,11 +188,13 @@ section[hidden]{display:none}
     <th data-k="edge">Edge</th>
     <th data-k="sigma">Moves / day</th>
     <th data-k="width">Range</th>
+    <th data-k="minPosUsd">Min pos</th>
     <th data-k="tvl">TVL</th>
     <th data-k="vol24">Vol 24h</th>
     <th data-k="ageDays">Age</th>
   </tr></thead><tbody id="rows"></tbody></table></div>
 
+  <p class="disclaimer"><b>Estimates only, not a guarantee:</b> Min position, breakeven, expected rebalances, and range profiles are modeled from recent pool fees, 7-day realized volatility, and assumed SOL/swap/perp costs. Realized yields, funding rates, and price paths can differ materially.</p>
   <p class="foot"><b>Fee window</b> picks how recently the fee income is measured, using Orca's own figures for each period — the same ten windows its own interface offers. Short windows surface pools that only started trading today, but five minutes of fees extrapolated to a daily rate is extremely noisy, so confirm on 24 hours or 7 days before acting. <b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it. That's the number that decides whether a pool is worth your money. <b>Edge</b> is the ratio of those two — a safety margin, not a return. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
 
   <details>
@@ -263,8 +276,59 @@ section[hidden]{display:none}
     <p><b>Fees and costs.</b> Fee income is your position's value times the daily yield, earned only while in range. Costs are the swap into the token, the perp fee on opening and closing (0.015% post-only, 0.045% market on Hyperliquid, doubled on HIP-3 markets; Aster's maker fee is currently 0%), and funding, which is added when it pays shorts.</p>
   </details>
 </section>
+
+<!-- ====================== CALCULADORA ====================== -->
+<section id="view-calc" role="tabpanel" hidden>
+  <p class="sub">Calcule o maior LP possível dentro de um orçamento máximo em USD (considerando colateral + buffer do short, reserva de ~0,03 SOL e custos de entrada) e compare os custos ao vivo das venues de perp nativas na Solana.</p>
+
+  <div class="panel">
+    <h2>Calculadora de orçamento máximo</h2>
+    <p class="note">Resolve o maior valor <b>P</b> para o LP tal que <b>P + colateral (0,5×P/alav + buffer) + reserva SOL (~0,03 SOL) + custos de entrada ≤ Orçamento B</b>.</p>
+    <div class="fields">
+      <label>Orçamento máx. B ($)<input id="calc-budget" type="number" value="100" min="0" step="10"></label>
+      <label>Pool Orca<select id="calc-pool"></select></label>
+      <label>Perfil de faixa<select id="calc-profile">
+        <option value="conservador">Conservador (2.0×)</option>
+        <option value="moderado" selected>Moderado (1.5×)</option>
+        <option value="agressivo">Agressivo (1.0×)</option>
+      </select></label>
+      <label>Venue do hedge<select id="calc-venue"></select></label>
+      <label>Alavancagem (x)<input id="calc-lev" type="number" value="2" min="1" max="250" step="0.5"></label>
+      <label>Buffer margem (%)<input id="calc-buf" type="number" value="20" min="0" max="200" step="5"></label>
+      <label>Horizonte (dias)<input id="calc-days" type="number" value="7" min="1" max="365" step="1"></label>
+    </div>
+    <div id="calc-status" class="status" style="margin-top:8px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Alocação &amp; viabilidade</h2>
+    <div class="kpis" id="calc-kpis"></div>
+    <div class="splitbar" id="calc-splitbar"></div>
+    <div class="legend" id="calc-legend"></div>
+    <div id="calc-alerts" style="margin-top:12px"></div>
+    <div style="overflow-x:auto;margin-top:10px"><table id="calc-breakdown"></table></div>
+    <p class="disclaimer"><b>Estimativa educacional, não é recomendação:</b> os valores usam snapshot ao vivo das pools da Orca (taxas recentes + volatilidade realizada de 7 dias) e das APIs públicas das venues de perp na Solana. Funding, borrow, taxas e preço podem mudar a qualquer momento.</p>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <div>
+        <h2 style="margin:0">Hedge mais barato agora (Solana)</h2>
+        <p class="note" style="margin:2px 0 0">Comparação ao vivo de short SOL em Jupiter Perps, Pacifica e Drift/Velocity (timeout 8s/venue, falha isolada).</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="status">Notional ($)<input id="hedge-notional" type="number" value="10" min="1" step="5" style="width:86px;margin-left:6px"></label>
+        <label class="status">Dias<input id="hedge-days" type="number" value="7" min="1" step="1" style="width:68px;margin-left:6px"></label>
+        <button class="primary" id="hedge-refresh">Atualizar hedge</button>
+      </div>
+    </div>
+    <div id="hedge-meta" class="status" style="margin-bottom:8px">Carregando venues…</div>
+    <div style="overflow-x:auto"><table id="hedge-table"></table></div>
+  </div>
+</section>
 </div>
 
+<script src="calc.js"></script>
 <script>
 /* ============ shared helpers ============ */
 const $=id=>document.getElementById(id);
@@ -294,15 +358,17 @@ function lPerDollar(P,w){const v=lpAt(1,P*(1-w),P*(1+w),P).val;return v>0?1/v:0;
 
 /* ============ tabs ============ */
 function showTab(name){
-  const scan=name==="scan";
-  $("view-scan").hidden=!scan; $("view-plan").hidden=scan;
-  $("tab-scan").setAttribute("aria-selected",String(scan));
-  $("tab-plan").setAttribute("aria-selected",String(!scan));
+  if(!["scan","plan","calc"].includes(name)) name="scan";
+  for(const t of ["scan","plan","calc"]){
+    $("view-"+t).hidden = t!==name;
+    $("tab-"+t).setAttribute("aria-selected", String(t===name));
+  }
   save("dnd-tab",name);
   window.scrollTo({top:0});
 }
 $("tab-scan").addEventListener("click",()=>showTab("scan"));
 $("tab-plan").addEventListener("click",()=>showTab("plan"));
+$("tab-calc").addEventListener("click",()=>{ showTab("calc"); if(!hedgeData) loadHedge(); renderCalc(); });
 
 /* ============================================================
    SCAN
@@ -351,8 +417,32 @@ function quoteUsd(pool,price){
   const q=tvl/valueInB;
   return Number.isFinite(q)&&q>0?q:null;
 }
-function score(pool,ds,tfKey,holdDays,posUsd){
+function evalWidthClient(w,posUsd,c){
+  if(!(w>0)||!(c.price>0)||c.sigma===null)return{earns:null,needs:null,netDay:null,share:null,conc:null};
+  const lp=lPerDollar(c.price,w);let earns,needs,share;
+  if(c.basis==="liquidity"){needs=c.costPerL*lp/c.qUsd;const Lme=(posUsd/c.qUsd)*lp;share=c.L&&c.L>0?Lme/(c.L+Lme):1;earns=(c.feesPerDay*share)/posUsd;}
+  else{const k=lp/lPerDollar(c.price,0.5);needs=((c.sigma*c.sigma)/8)*k;share=c.tvl>0?posUsd/(c.tvl+posUsd):1;earns=c.yTvl*k*(c.tvl>0?c.tvl/(c.tvl+posUsd):1);}
+  return{earns,needs,netDay:earns-needs,share,conc:c.yTvl>0?earns/c.yTvl:null};
+}
+function solveMinPosClient(w,holdDays,c,co){
+  if(!(w>0)||!(c.price>0)||c.sigma===null)return{minPosUsd:null,minPosReason:"missing price or volatility"};
+  const reb=holdDays*(c.sigma/w)**2, fixOnce=(co.solTxCostSol*co.lpTxCount+co.tickArrayRentSol)*(co.solPriceUsd||0);
+  const swRate=0.5*(c.rate+co.swapSlippage), hRate=2*co.perpTakerFee*co.hedgeRatio, fRate=co.perpFundingDaily*co.hedgeRatio*holdDays;
+  const costAt=p=>fixOnce*(1+reb)+p*(swRate*(1+reb)+hRate+fRate);
+  const prof=p=>{const ev=evalWidthClient(w,p,c);return ev.netDay===null?null:ev.netDay*holdDays*p-costAt(p);};
+  const f10=prof(10);
+  if(f10===null||!Number.isFinite(f10))return{minPosUsd:null,minPosReason:"insufficient pool data"};
+  if(f10>=0)return{minPosUsd:10,minPosReason:null};
+  const PHI=(Math.sqrt(5)-1)/2;let lo=Math.log(10),hi=Math.log(1e7),x1=hi-PHI*(hi-lo),x2=lo+PHI*(hi-lo),f1=prof(Math.exp(x1)),f2=prof(Math.exp(x2));
+  for(let i=0;i<70;i++){if(f1<f2){lo=x1;x1=x2;f1=f2;x2=lo+PHI*(hi-lo);f2=prof(Math.exp(x2));}else{hi=x2;x2=x1;f2=f1;x1=hi-PHI*(hi-lo);f1=prof(Math.exp(x1));}}
+  const xPk=Math.exp((lo+hi)/2),fPk=prof(xPk);
+  if(Math.max(fPk,prof(1e7))<0)return{minPosUsd:null,minPosReason:"costs exceed max profit"};
+  let a=10,b=fPk>=0?xPk:1e7;for(let i=0;i<50;i++){const m=(a+b)/2;if(prof(m)>=0)b=m;else a=m;}
+  return{minPosUsd:b,minPosReason:null};
+}
+function score(pool,ds,tfKey,holdDays,posUsd,opts={}){
   posUsd=Math.max(1,posUsd||1000);
+  const co={solTxCostSol:0.00002,lpTxCount:3,tickArrayRentSol:0,swapSlippage:0.001,hedgeRatio:0.5,perpTakerFee:0.0005,perpFundingDaily:0.0001,solPriceUsd:0,...opts};
   const stats=pool.stats||{};
   const tvl=num(pool.tvlUsdc),price=num(pool.price);
   const s24=stats["24h"]||{},s7=stats["7d"]||{},s30=stats["30d"]||{};
@@ -372,7 +462,6 @@ function score(pool,ds,tfKey,holdDays,posUsd){
   const feesPerDay=num(used.fees)*(24/useHours);
   const windowVol=num(used.volume);
 
-  // Effective fee rate = base feeRate + adaptive volatility surcharge (if enabled).
   const baseFee=num(pool.feeRate);
   const adaptiveFee=(pool.adaptiveFeeEnabled&&pool.adaptiveFee?.currentRate!=null)?num(pool.adaptiveFee.currentRate):0;
   const rate=(baseFee+adaptiveFee)/1e6;
@@ -389,23 +478,24 @@ function score(pool,ds,tfKey,holdDays,posUsd){
   const ratio=edge!==null&&edgeTvl?edge/edgeTvl:null;
   if(edge===null||!Number.isFinite(edge)||(ratio!==null&&(ratio>100||ratio<0.01))){edge=edgeTvl;basis="tvl";}
 
-  const width=sigma!==null?Math.max(0.08,Math.min(0.85,1.5*sigma*Math.sqrt(holdDays))):null;
-  let earns=null,needs=null,netDay=null,share=null,conc=null;
+  const ctx={price,sigma,basis,costPerL,qUsd,L,feesPerDay,tvl,yTvl,rate};
+  const profiles={};
+  for(const [name,k] of [["conservador",2.0],["moderado",1.5],["agressivo",1.0]]){
+    const w=sigma!==null?Math.max(0.03,Math.min(0.85,k*sigma*Math.sqrt(holdDays))):null;
+    const ev=evalWidthClient(w,posUsd,ctx), ms=solveMinPosClient(w,holdDays,ctx,co);
+    profiles[name]={k,widthPct:w!==null?w*100:null,lower:(w!==null&&price>0)?price*(1-w):null,upper:(w!==null&&price>0)?price*(1+w):null,
+      expectedRebalances:(w&&sigma!==null)?holdDays*(sigma/w)**2:null,netDay:ev.netDay,netPer1k:ev.netDay!==null?ev.netDay*1000:null,minPosUsd:ms.minPosUsd,minPosReason:ms.minPosReason};
+  }
+  const mod=profiles.moderado, width=mod.widthPct!==null?mod.widthPct/100:null;
+  const {earns,needs,netDay,share,conc}=evalWidthClient(width,posUsd,ctx);
+  let costs=null, breakevenDays=null;
   if(width&&price>0&&sigma!==null){
-    const lp=lPerDollar(price,width);
-    if(basis==="liquidity"){
-      needs=costPerL*lp/qUsd;
-      const Lme=(posUsd/qUsd)*lp;
-      share=L&&L>0?Lme/(L+Lme):1;
-      earns=(feesPerDay*share)/posUsd;
-    }else{
-      const k=lp/lPerDollar(price,0.5);
-      needs=((sigma*sigma)/8)*k;
-      share=tvl>0?posUsd/(tvl+posUsd):1;
-      earns=yTvl*k*(tvl>0?tvl/(tvl+posUsd):1);
-    }
-    netDay=earns-needs;
-    conc=yTvl>0?earns/yTvl:null;
+    const reb=mod.expectedRebalances, fixOnce=(co.solTxCostSol*co.lpTxCount+co.tickArrayRentSol)*(co.solPriceUsd||0);
+    const lpFixedUsd=fixOnce*(1+reb), swapOnce=posUsd*0.5*(rate+co.swapSlippage), swapUsd=swapOnce*(1+reb);
+    const hedgeUsd=posUsd*2*co.perpTakerFee*co.hedgeRatio, fundingUsd=posUsd*co.perpFundingDaily*co.hedgeRatio*holdDays;
+    costs={lpFixedUsd,swapUsd,hedgeUsd,fundingUsd,rebalances:reb,totalUsd:lpFixedUsd+swapUsd+hedgeUsd+fundingUsd};
+    const dNet=netDay*posUsd-posUsd*co.perpFundingDaily*co.hedgeRatio-(fixOnce+swapOnce)*(sigma/width)**2;
+    if(dNet>0)breakevenDays=Math.max(0,(fixOnce+swapOnce+hedgeUsd)/dNet);
   }
   const y24=tvl>0?num(s24.fees)/tvl:0, y7=tvl>0?num(s7.fees)/7/tvl:0, y30=tvl>0?num(s30.fees)/30/tvl:0;
   return {address:pool.address,pair:`${A.symbol||"?"}/${B.symbol||"?"}`,
@@ -420,6 +510,7 @@ function score(pool,ds,tfKey,holdDays,posUsd){
     poolAvg:yTvl,share,conc,posUsd,
     edge,edgeTvl,basis,width,earns,needs,netDay,
     netPer1k:netDay!==null?netDay*1000:null,
+    minPosUsd:mod.minPosUsd,minPosReason:mod.minPosReason,breakevenDays,costs,profiles,
     dsUrl:ds?.url||null, onDs:!!ds};
 }
 
@@ -441,10 +532,13 @@ async function dexscreen(addresses){
 
 async function load(){
   $("status").textContent="Loading…"; $("err").innerHTML=""; $("refresh").disabled=true;
-  const hold=+$("hold").value||30, tf=$("tf").value||"24h", pos=Math.max(1,+$("pos").value||1000);
+  const hold=Math.max(1,Math.min(365,+$("hold").value||30)), tf=$("tf").value||"24h", pos=Math.max(1,+$("pos").value||1000);
+  const tfRaw=parseFloat($("perpTakerFee").value), fnRaw=parseFloat($("perpFundingDaily").value);
+  const perpTakerFee=(Number.isFinite(tfRaw)&&tfRaw>=0?tfRaw:0.05)/100;
+  const perpFundingDaily=(Number.isFinite(fnRaw)?fnRaw:0.01)/100;
   try{
     let data=null;
-    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&pos=${pos}`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
+    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&posUsd=${pos}&perpTakerFee=${perpTakerFee}&perpFundingDaily=${perpFundingDaily}`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
     if(!data){
       const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&stats=5m,15m,30m,1h,2h,4h,8h,24h,7d,30d&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
       if(!r.ok) throw new Error("Orca returned "+r.status);
@@ -454,10 +548,13 @@ async function load(){
       $("status").textContent=`Scoring ${raw.length} pools…`;
       let dsMap=new Map();
       try{ dsMap=await dexscreen(raw.map(p=>p.address).filter(Boolean)); }catch(e){}
-      data={pools:raw.map(p=>score(p,dsMap.get(p.address),tf,hold,pos)).filter(p=>!p.stablePair),
+      const solP=raw.filter(x=>((x.tokenA?.symbol||"").toUpperCase()==="SOL"&&(x.tokenB?.symbol||"").toUpperCase()==="USDC")).sort((a,b)=>num(b.tvlUsdc)-num(a.tvlUsdc))[0];
+      const solPriceUsd=solP?num(solP.price):0;
+      data={pools:raw.map(p=>score(p,dsMap.get(p.address),tf,hold,pos,{perpTakerFee,perpFundingDaily,solPriceUsd})).filter(p=>!p.stablePair),
             scanned:raw.length,at:Date.now(),direct:true,dexscreenerMatched:dsMap.size};
     }
     pools=data.pools;
+    if(data.solPriceUsd>0) lastSolPriceUsd=data.solPriceUsd;
     const now=Date.now(); let fresh=0;
     pools.forEach(p=>{ if(!seenBefore[p.address]){seenBefore[p.address]=now;fresh++;} p.firstSeen=seenBefore[p.address];
       p.isNew=p.ageDays!=null&&p.ageDays<7; });
@@ -469,7 +566,7 @@ async function load(){
     $("err").innerHTML=`<div class="err">${e.message}. If this isn't running on Vercel, the browser may be blocked from calling Orca directly — the <code>/api/pools</code> function exists to avoid that.</div>`;
     $("status").textContent="Failed";
   }
-  $("refresh").disabled=false; renderScan();
+  $("refresh").disabled=false; renderScan(); populateCalcPools(); renderCalc();
 }
 
 function renderScan(){
@@ -488,6 +585,7 @@ function renderScan(){
   });
   const val=p=>{if(sortKey==="pair")return p.pair;
     if(sortKey==="ageDays")return p.ageDays==null?999:p.ageDays;
+    if(sortKey==="minPosUsd")return p.minPosUsd==null?(sortDir===1?1e12:-1e9):p.minPosUsd;
     const v=p[sortKey];return v==null?-1e9:v;};
   rows.sort((a,b)=>{const x=val(a),y=val(b);
     if(sortKey==="ageDays")return (x-y)*(sortDir===-1?1:-1);
@@ -503,6 +601,8 @@ function renderScan(){
   $("rows").innerHTML=rows.map(p=>{
     const e=p.edge, ec=e==null?"":e>=1.5?"gain":e>=1?"e-mid":"loss";
     const fresh=p.isNew||p.firstSeen>recentMs;
+    const minCls=p.minPosUsd==null?"loss":(p.posUsd>=p.minPosUsd?"gain":"e-mid");
+    const minTxt=p.minPosUsd==null?"Never":p.minPosUsd>=1000?usdShort(p.minPosUsd):"$"+Math.round(p.minPosUsd);
     return `<tr data-a="${p.address}" class="${openRow===p.address?"open ":""}${fresh?"isnew":""}">
       <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.ageDays!=null&&p.ageDays<7?`<span class="tag new">${ageTxt(p.ageDays)} old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.haveTf?"":'<span class="tag warn">24h data</span>'}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}${links(p)}</td>
       <td class="mono ${p.netDay>0?"gain":"loss"}"><b>${pc(p.netDay)}</b></td>
@@ -512,11 +612,17 @@ function renderScan(){
       <td class="mono ${ec}">${e==null?"—":e.toFixed(2)+"×"}</td>
       <td class="mono">${p.sigma==null?"—":pc(p.sigma,1)}</td>
       <td class="mono">${p.width?"±"+(p.width*100).toFixed(0)+"%":"—"}</td>
+      <td class="mono ${minCls}" title="${p.minPosReason||""}">${minTxt}</td>
       <td class="mono">${usdShort(p.tvl)}</td>
       <td class="mono">${usdShort(p.vol24)}</td>
       <td class="mono">${ageTxt(p.ageDays)}</td>
     </tr>${openRow===p.address?detail(p):""}`;}).join("")
-    || `<tr><td colspan="11" class="status" style="padding:16px">Nothing matches. Clear a filter or lower the minimum TVL.</td></tr>`;
+    || `<tr><td colspan="12" class="status" style="padding:16px">Nothing matches. Clear a filter or lower the minimum TVL.</td></tr>`;
+}
+
+function fmtPoolPx(v,p){
+  if(v==null)return "—";
+  return p.quoteUsd&&Math.abs(p.quoteUsd-1)<0.02?px(v):(+v).toPrecision(5)+" "+p.quote;
 }
 
 function detail(p){
@@ -525,20 +631,37 @@ function detail(p){
     : p.edge>=1.5?["gain",`Worth opening. A $1,000 position would clear about $${p.netPer1k.toFixed(2)} a day at ±${(p.width*100).toFixed(0)}%, with fees ${p.edge.toFixed(1)}× the movement cost.`]
     : ["e-mid",`Thin margin. It clears about $${p.netPer1k.toFixed(2)} a day per $1,000, but fees are only ${p.edge.toFixed(2)}× the movement cost — a quiet week turns this negative.`];
   const trend=p.trend==null?"no 30-day history":p.trend>1.3?`fees up ${p.trend.toFixed(1)}× on the 30-day average`:p.trend<0.75?`fees down to ${p.trend.toFixed(2)}× the 30-day average`:"fees steady against the 30-day average";
-  return `<tr class="detail"><td colspan="11">
+  const c=p.costs;
+  const profRows=[["conservador","Conservador"],["moderado","Moderado"],["agressivo","Agressivo"]].map(([key,label])=>{
+    const pr=p.profiles?.[key]; if(!pr)return "";
+    const minStr=pr.minPosUsd==null?`<span class="loss" title="${pr.minPosReason||""}">Never</span>`:usd(pr.minPosUsd);
+    return `<tr>
+      <td><b>${label}</b> <span class="tier">${pr.k.toFixed(1)}×</span></td>
+      <td class="mono">${fmtPoolPx(pr.lower,p)} – ${fmtPoolPx(pr.upper,p)}</td>
+      <td class="mono">±${pr.widthPct!=null?pr.widthPct.toFixed(1)+"%":"—"}</td>
+      <td class="mono">${pr.expectedRebalances!=null?pr.expectedRebalances.toFixed(2)+"×":"—"}</td>
+      <td class="mono ${pr.netDay>0?"gain":"loss"}">${pr.netPer1k!=null?"$"+pr.netPer1k.toFixed(2):"—"}</td>
+      <td class="mono">${minStr}</td>
+    </tr>`;
+  }).join("");
+  return `<tr class="detail"><td colspan="12">
     <p class="verdict ${v[0]}"><b>${v[1]}</b></p>
     <div class="dgrid">
-      <div class="dcell"><div class="v mono">${p.quoteUsd&&Math.abs(p.quoteUsd-1)<0.02?px(p.price):(+p.price).toPrecision(6)+" "+p.quote}</div><div class="k">${p.base} price in ${p.quote}</div></div>
+      <div class="dcell"><div class="v mono">${fmtPoolPx(p.price,p)}</div><div class="k">${p.base} price in ${p.quote}</div></div>
       <div class="dcell"><div class="v mono">±${p.width?(p.width*100).toFixed(0):"—"}%</div><div class="k">Suggested range</div></div>
       <div class="dcell"><div class="v mono">${pc(p.poolAvg)}</div><div class="k">Pool average / day (Orca's Yield/TVL)</div></div>
       <div class="dcell"><div class="v mono gain">${pc(p.earns)}</div><div class="k">Your yield / day on $${(p.posUsd||1000).toLocaleString()}</div></div>
       <div class="dcell"><div class="v mono">${pc(p.needs)}</div><div class="k">Break-even / day</div></div>
       <div class="dcell"><div class="v mono">${p.netPer1k!=null?"$"+p.netPer1k.toFixed(2):"—"}</div><div class="k">Net / day per $1,000</div></div>
+      <div class="dcell"><div class="v mono ${p.minPosUsd==null?"loss":p.posUsd>=p.minPosUsd?"gain":"e-mid"}">${p.minPosUsd!=null?usd(p.minPosUsd):"Never"}</div><div class="k">Min position (breakeven)</div></div>
+      <div class="dcell"><div class="v mono">${p.breakevenDays!=null?p.breakevenDays.toFixed(1)+"d":"Never"}</div><div class="k">Est. breakeven days</div></div>
       <div class="dcell"><div class="v mono">${p.bothVolatile?"Short both":"Short "+p.base}</div><div class="k">Hedge needed</div></div>
     </div>
+    ${c?`<p class="status" style="margin:2px 0 8px"><b>Cost breakdown (${Math.max(1,+$("hold").value||30)}d @ $${(p.posUsd||1000).toLocaleString()}):</b> total <b>${usd(c.totalUsd)}</b> — LP fixed ${usd(c.lpFixedUsd)} · swap ${usd(c.swapUsd)} · perp fees ${usd(c.hedgeUsd)} · funding ${usd(c.fundingUsd)} · est. rebalances <b>${c.rebalances.toFixed(2)}×</b>.${p.minPosReason?` <span class="loss">(${p.minPosReason})</span>`:""}</p>`:""}
+    ${profRows?`<table class="ptable"><thead><tr><th>Profile</th><th>Price range (lower – upper)</th><th>Width</th><th>Rebalances</th><th>Net / $1k / day</th><th>Min USD</th></tr></thead><tbody>${profRows}</tbody></table>`:""}
     <p style="margin:0 0 8px">${p.width&&p.earns!=null?`<button class="primary" data-plan="${p.address}">Plan this pool →</button>`:""}</p>
     <p class="status">Fees from Orca's own <b>${TFLABEL[p.usedPeriod]||p.usedPeriod}</b> figures${p.haveTf?"":` (the ${TFLABEL[$("tf").value]||"chosen"} window wasn't returned for this pool)`}. Volatility from ${p.sigmaSrc==="orca7d"?"Orca's 7-day price history":p.sigmaSrc==="dexscreener"?"DexScreener's price changes":"no source"}. Scored on ${p.basis==="liquidity"?"the pool's active liquidity":"TVL, because the liquidity figure looked unreliable"}. A $${(p.posUsd||1000).toLocaleString()} position would be <b>${p.share!=null?(p.share*100).toFixed(1):"?"}%</b> of the active liquidity, earning <b>${p.conc!=null?p.conc.toFixed(2):"?"}x</b> the pool average — a narrower range lifts that, and your own deposit dilutes it.${p.quoteUsd&&Math.abs(p.quoteUsd-1)>0.01?` Priced in ${p.quote} at $${p.quoteUsd.toFixed(4)}.`:""} Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}</p>
-    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}</p>
+    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}. <i>Estimates only — not a guarantee of future returns.</i></p>
   </td></tr>`;
 }
 
@@ -559,10 +682,10 @@ function planPool(p){
 
 document.querySelectorAll("#view-scan th[data-k]").forEach(th=>th.addEventListener("click",()=>{
   const k=th.dataset.k;
-  if(sortKey===k)sortDir=-sortDir; else{sortKey=k;sortDir=k==="pair"?1:-1;}
+  if(sortKey===k)sortDir=-sortDir; else{sortKey=k;sortDir=(k==="pair"||k==="minPosUsd")?1:-1;}
   if([...$("rank").options].some(o=>o.value===k)) $("rank").value=k;
   renderScan();}));
-$("rank").addEventListener("change",()=>{sortKey=$("rank").value;sortDir=-1;renderScan();});
+$("rank").addEventListener("change",()=>{sortKey=$("rank").value;sortDir=sortKey==="minPosUsd"?1:-1;renderScan();});
 $("rows").addEventListener("click",e=>{
   const pl=e.target.dataset.plan;
   if(pl){const p=pools.find(x=>x.address===pl); if(p)planPool(p); return;}
@@ -576,6 +699,8 @@ $("rows").addEventListener("click",e=>{
 ["q","minTvl","kind"].forEach(id=>$(id).addEventListener("input",renderScan));
 $("hold").addEventListener("change",load);
 $("pos").addEventListener("change",load);
+$("perpTakerFee").addEventListener("change",load);
+$("perpFundingDaily").addEventListener("change",load);
 $("tf").addEventListener("change",load);
 $("refresh").addEventListener("click",load);
 
@@ -684,10 +809,174 @@ function run(){
 }
 document.querySelectorAll("#view-plan input,#view-plan select").forEach(el=>el.addEventListener("input",run));
 
+/* ============================================================
+   CALCULADORA & HEDGE AO VIVO
+   ============================================================ */
+let hedgeData=null, lastSolPriceUsd=0;
+
+function pickDefaultSolUsdc(list){
+  const solUsdc=list.filter(p=>p.pair==="SOL/USDC").sort((a,b)=>b.tvl-a.tvl);
+  if(solUsdc.length) return solUsdc[0];
+  return [...list].sort((a,b)=>b.tvl-a.tvl)[0]||null;
+}
+
+function populateCalcPools(){
+  const sel=$("calc-pool"), prev=sel.value;
+  if(!pools.length){ sel.innerHTML='<option value="">Carregando pools…</option>'; return; }
+  const sorted=[...pools].sort((a,b)=>b.tvl-a.tvl);
+  sel.innerHTML=sorted.map(p=>`<option value="${p.address}">${p.pair} (${p.feeRate.toFixed(2)}% · TVL ${usdShort(p.tvl)})</option>`).join("");
+  if(prev && sorted.some(p=>p.address===prev)) sel.value=prev;
+  else {
+    const def=pickDefaultSolUsdc(sorted);
+    if(def) sel.value=def.address;
+  }
+}
+
+function populateCalcVenues(){
+  const sel=$("calc-venue"), prev=sel.value;
+  const venues=hedgeData?.venues||[];
+  if(!venues.length){ sel.innerHTML='<option value="">Carregando venues…</option>'; return; }
+  sel.innerHTML=venues.map(v=>{
+    const tags=[];
+    if(v.cheapest) tags.push("mais barato");
+    if(v.beta) tags.push("beta");
+    if(!v.ok) tags.push("erro");
+    return `<option value="${v.id}">${v.name}${tags.length?" ["+tags.join(", ")+"]":""}</option>`;
+  }).join("");
+  if(prev && venues.some(v=>v.id===prev)) sel.value=prev;
+  else if(hedgeData?.cheapest) sel.value=hedgeData.cheapest;
+  else {
+    const firstOk=venues.find(v=>v.ok);
+    if(firstOk) sel.value=firstOk.id;
+  }
+}
+
+async function loadHedge(){
+  const n=Math.max(1,+$("hedge-notional").value||10);
+  const d=Math.max(1,+$("hedge-days").value||7);
+  $("hedge-refresh").disabled=true;
+  $("hedge-meta").textContent="Consultando Jupiter, Pacifica e Drift/Velocity ao vivo…";
+  try{
+    const r=await fetch(`/api/hedge?notional=${encodeURIComponent(n)}&days=${encodeURIComponent(d)}`);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    hedgeData=await r.json();
+    const vel=hedgeData.venues?.find(v=>v.id==="velocity"&&v.solPriceUsd>0);
+    if(vel && !(lastSolPriceUsd>0)) lastSolPriceUsd=vel.solPriceUsd;
+    populateCalcVenues();
+    renderHedgeTable();
+    renderCalc();
+  }catch(e){
+    $("hedge-meta").innerHTML=`<span class="loss">Falha ao consultar /api/hedge: ${e.message}</span>`;
+  }
+  $("hedge-refresh").disabled=false;
+}
+
+function renderHedgeTable(){
+  if(!hedgeData||!Array.isArray(hedgeData.venues)) return;
+  const vs=hedgeData.venues;
+  $("hedge-meta").innerHTML=`Consulta ao vivo: <span class="mono">${hedgeData.queriedAt}</span> · Notional <b>${usd(hedgeData.notional)}</b> · Horizonte <b>${hedgeData.days}d</b>${hedgeData.cheapest?` · Mais barato (válido): <b class="gain">${vs.find(v=>v.id===hedgeData.cheapest)?.name||hedgeData.cheapest}</b>`:""}`;
+  $("hedge-table").innerHTML=`<thead><tr>
+    <th>Venue</th><th>Taker + impacto (/lado)</th><th>Carregamento (/h)</th><th>Custo trade</th><th>Carregamento (${hedgeData.days}d)</th><th>Total</th><th>Total %</th><th>Mínimo</th><th>Avisos &amp; fontes</th>
+  </tr></thead><tbody>`+vs.map(v=>{
+    if(!v.ok){
+      return `<tr>
+        <td><b>${v.name}</b>${v.beta?' <span class="tag warn">beta</span>':""}</td>
+        <td colspan="7" class="loss" style="text-align:left">Erro: ${v.error}</td>
+        <td style="text-align:left"><a href="${v.sources?.api||"#"}" target="_blank" rel="noopener noreferrer">API</a></td>
+      </tr>`;
+    }
+    const carryHourly = v.id==="jupiter"
+      ? `+${(v.borrowHourly*100).toFixed(4)}%/h (borrow)`
+      : `${(v.fundingHourly*100)>=0?"+":""}${(v.fundingHourly*100).toFixed(5)}%/h (short ${v.fundingHourly>=0?"recebe":"paga"})`;
+    const srcs=Object.entries(v.sources||{}).map(([k,u])=>`<a href="${u}" target="_blank" rel="noopener noreferrer">${k}</a>`).join(" · ");
+    const avisosHtml=(v.avisos||[]).map(a=>`<span class="tag warn" style="margin-left:0;margin-right:4px">${a}</span>`).join("");
+    return `<tr class="${v.cheapest?"cheapest":""}">
+      <td><b>${v.name}</b>${v.cheapest?' <span class="tag ok">CHEAPEST</span>':""}${v.beta?' <span class="tag warn">beta</span>':""}</td>
+      <td class="mono">${((v.takerRate+(v.impactRate||0))*100).toFixed(3)}%</td>
+      <td class="mono">${carryHourly}</td>
+      <td class="mono">${usd(v.custoTrade,4)}</td>
+      <td class="mono ${v.carregamento<=0?"gain":"loss"}">${usd(v.carregamento,4)}</td>
+      <td class="mono ${v.total<=0?"gain":"loss"}"><b>${usd(v.total,4)}</b></td>
+      <td class="mono ${v.total<=0?"gain":"loss"}">${v.totalPct.toFixed(4)}%</td>
+      <td class="mono ${v.minimoOk?"gain":"loss"}">${v.minimoOk?"OK":"Abaixo"} <small class="status">(${v.minOrderLabel||""})</small></td>
+      <td style="text-align:left;white-space:normal;min-width:220px">${avisosHtml}<div class="status" style="margin-top:2px">${srcs}</div></td>
+    </tr>`;
+  }).join("")+"</tbody>";
+}
+
+function renderCalc(){
+  const poolAddr=$("calc-pool").value;
+  const pool=pools.find(p=>p.address===poolAddr)||pickDefaultSolUsdc(pools);
+  const venueId=$("calc-venue").value||hedgeData?.cheapest;
+  const venue=hedgeData?.venues?.find(v=>v.id===venueId)||hedgeData?.venues?.find(v=>v.ok)||null;
+  const budgetUsd=Math.max(0,+$("calc-budget").value||0);
+  const profile=$("calc-profile").value||"moderado";
+  const levInput=Math.max(1,+$("calc-lev").value||2);
+  const marginBufferPct=Math.max(0,+$("calc-buf").value||0)/100;
+  const days=Math.max(1,Math.round(+$("calc-days").value||7));
+
+  if(!pool){
+    $("calc-status").textContent="Aguardando pools da Orca…";
+    $("calc-kpis").innerHTML=""; $("calc-breakdown").innerHTML="";
+    return;
+  }
+  const solPx = lastSolPriceUsd > 0 ? lastSolPriceUsd : (venue?.solPriceUsd > 0 ? venue.solPriceUsd : ((pool.base||"").toUpperCase()==="SOL" ? pool.price*(pool.quoteUsd||1) : 0));
+  const res=window.OrcaCalc.solveBudget({
+    budgetUsd, pool, venue, profile, leverage: levInput, days, marginBufferPct, solPriceUsd: solPx
+  });
+
+  const vLimits=venue?`Limites do venue: ${venue.minLeverage||1}x–${venue.maxLeverage||20}x${res.leverageClamped?` (alavancagem ajustada para ${res.effectiveLeverage}x)`:""}`:"Sem venue carregado (usando 2x sem custo perp)";
+  $("calc-status").innerHTML=`Pool selecionado: <b>${pool.pair}</b> (${pool.feeRate.toFixed(2)}% · TVL ${usdShort(pool.tvl)}) · SOL ref: <b class="mono">${solPx>0?usd(solPx):"—"}</b> · ${vLimits}`;
+
+  const netCls = res.netProfitUsd==null ? "" : res.netProfitUsd>=0 ? "gain" : "loss";
+  const baseSym = pool.base || "SOL", quoteSym = pool.quote || "USDC";
+  const lpSplitTxt = res.lpBaseAmount!=null ? `≈ ${tok(res.lpBaseAmount)} ${baseSym} + ${tok(res.lpQuoteAmount)} ${quoteSym}` : "";
+  $("calc-kpis").innerHTML=[
+    ["LP máximo (P)", usd(res.lpUsd), "", lpSplitTxt],
+    ["Colateral no venue", usd(res.collateralTotalUsd), "", `${usd(res.collateralBaseUsd)} margem + ${usd(res.marginBufferUsd)} buffer`],
+    ["Reserva SOL", usd(res.solReserveUsd), "", `${res.solReserveSol} SOL p/ taxas e rent`],
+    ["Custos de entrada", usd(res.entryCostsUsd), "", `swap + perp open + tx`],
+    ["Mínimos", (res.venueMinOk&&res.poolMinOk)?"OK":"Abaixo", (res.venueMinOk&&res.poolMinOk)?"gain":"loss", `Venue: ${res.venueMinOk?"OK":"Não"} · Pool mín: ${res.minPosUsd!=null?usd(res.minPosUsd):"Nunca"}`],
+    [`Lucro líq. (${days}d)`, res.netProfitUsd!=null?usd(res.netProfitUsd):"—", netCls, res.netProfitPctBudget!=null?`${res.netProfitPctBudget.toFixed(2)}% s/ B`:""]
+  ].map(([k,v,c,sub])=>`<div class="kpi"><div class="v mono ${c}">${v}</div><div class="k">${k}</div>${sub?`<div class="status">${sub}</div>`:""}</div>`).join("");
+
+  const denom=Math.max(budgetUsd, res.totalAllocatedUsd, 1e-9);
+  $("calc-splitbar").innerHTML=`<i class="a" style="width:${res.lpUsd/denom*100}%"></i><i class="b" style="width:${res.collateralTotalUsd/denom*100}%"></i><i class="c" style="width:${res.solReserveUsd/denom*100}%"></i><i class="d" style="width:${res.entryCostsUsd/denom*100}%"></i>`;
+  $("calc-legend").innerHTML=`<span><b style="background:var(--lp)"></b>LP ${usd(res.lpUsd)}</span><span><b style="background:var(--loss)"></b>Colateral ${usd(res.collateralTotalUsd)}</span><span><b style="background:var(--accent)"></b>Reserva SOL ${usd(res.solReserveUsd)}</span><span><b style="background:var(--mute)"></b>Entrada ${usd(res.entryCostsUsd)}</span><span><b>Total alocado: ${usd(res.totalAllocatedUsd)} / ${usd(budgetUsd)}</b></span>`;
+
+  const alerts=[];
+  if(!res.venueMinOk) alerts.push(`Não atende ao mínimo do venue (${venue?venue.name:"nenhum"}).`);
+  if(!res.poolMinOk) alerts.push(`Abaixo do mínimo de breakeven do pool (${res.minPosUsd!=null?usd(res.minPosUsd):"nunca empata"}).`);
+  for(const w of res.warnings) if(!alerts.includes(w)) alerts.push(w);
+  $("calc-alerts").innerHTML = alerts.length
+    ? `<p class="band ${(!res.feasible)?"bad":""}">${alerts.map(a=>`• ${a}`).join("<br>")}</p>`
+    : `<p class="band">Orçamento compatível com os mínimos do venue e do pool no horizonte de ${days} dias.</p>`;
+
+  const rng=res.range;
+  const hc=res.horizonCosts;
+  $("calc-breakdown").innerHTML=`<thead><tr><th>Item</th><th>Valor</th><th>Detalhe</th></tr></thead><tbody>
+    <tr><td>Posição LP (P)</td><td class="mono"><b>${usd(res.lpUsd)}</b></td><td>${lpSplitTxt} (hedge short notional ${usd(res.hedgeNotionalUsd)})</td></tr>
+    <tr><td>Colateral no venue (${res.effectiveLeverage}x + ${(marginBufferPct*100).toFixed(0)}% buffer)</td><td class="mono">${usd(res.collateralTotalUsd)}</td><td>Base ${usd(res.collateralBaseUsd)} + buffer ${usd(res.marginBufferUsd)}</td></tr>
+    <tr><td>Reserva de SOL</td><td class="mono">${usd(res.solReserveUsd)}</td><td>${res.solReserveSol} SOL a ${usd(res.solPriceUsd)}/SOL</td></tr>
+    <tr><td>Custos de entrada</td><td class="mono">${usd(res.entryCostsUsd)}</td><td>Swap ${usd(res.swapEntryUsd)} + perp open ${usd(res.perpOpenUsd)} + tx ${usd(res.txEntryUsd)}</td></tr>
+    <tr><td><b>Soma alocada (≤ B)</b></td><td class="mono"><b>${usd(res.totalAllocatedUsd)}</b></td><td>Orçamento B = ${usd(budgetUsd)} (sobra ${usd(res.remainingUsd)})</td></tr>
+    <tr><td>Faixa sugerida (${profile})</td><td class="mono">${rng.widthPct!=null?"±"+rng.widthPct.toFixed(1)+"%":"—"}</td><td>${rng.lower!=null?`${fmtPoolPx(rng.lower,pool)} – ${fmtPoolPx(rng.upper,pool)}`:"—"} · ~${rng.expectedRebalances.toFixed(2)}× rebalances em ${days}d</td></tr>
+    <tr><td>Rendimento bruto LP − IL/LVR (${days}d)</td><td class="mono ${res.lpNetBeforeCostsUsd>=0?"gain":"loss"}">${res.lpNetBeforeCostsUsd!=null?usd(res.lpNetBeforeCostsUsd):"—"}</td><td>Fees ${res.lpGrossYieldUsd!=null?usd(res.lpGrossYieldUsd):"—"} − IL/LVR ${res.lpIlCostUsd!=null?usd(res.lpIlCostUsd):"—"}</td></tr>
+    <tr><td>Custos totais no horizonte (${days}d)</td><td class="mono">${usd(hc.totalUsd)}</td><td>LP tx ${usd(hc.lpFixedUsd)} + swap/reb ${usd(hc.swapUsd)} + perp trade ${usd(hc.perpTradeUsd)} + ${hc.perpCarryUsd<=0?"funding recebido":"funding/borrow"} ${usd(hc.perpCarryUsd)}</td></tr>
+    <tr><td><b>Lucro líquido estimado (${days}d)</b></td><td class="mono ${netCls}"><b>${res.netProfitUsd!=null?usd(res.netProfitUsd):"—"}</b></td><td>${res.netProfitPctBudget!=null?`${res.netProfitPctBudget.toFixed(2)}% sobre B (${res.netProfitPctLp.toFixed(2)}% sobre P)`:""} · minPosUsd = ${res.minPosUsd!=null?usd(res.minPosUsd):"Nunca"}</td></tr>
+  </tbody>`;
+}
+
+document.querySelectorAll("#calc-budget,#calc-pool,#calc-profile,#calc-venue,#calc-lev,#calc-buf,#calc-days").forEach(el=>el.addEventListener("input",renderCalc));
+$("calc-pool").addEventListener("change",renderCalc);
+$("calc-venue").addEventListener("change",renderCalc);
+$("hedge-refresh").addEventListener("click",loadHedge);
+
 /* ============ boot ============ */
 showTab(LS("dnd-tab","scan"));
 run();
 load();
+loadHedge();
 </script>
 </body>
 </html>
