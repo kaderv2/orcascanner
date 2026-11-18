@@ -234,6 +234,85 @@ const reqProfileKeys = ["k", "widthPct", "lower", "upper", "expectedRebalances",
 ok("every profile exposes all required keys",
    ["conservador", "moderado", "agressivo"].every(p => reqProfileKeys.every(k => k in profs[p])));
 
+console.log("\nEdge accuracy: concentrated/pegged pools keep the liquidity basis (no TVL-fallback inflation)");
+// Same dollars, but the liquidity is packed into a +-0.05% band (a 0.01% tier LST/wrapped pair): concentration in the 1000s.
+function buildPegged({ tvlUsd = 1.1e6, fees24 = 900, sigma = 0.0004, bandW = 0.0005 } = {}) {
+  const P = 1, decA = 8, decB = 8, q = 1;
+  const Vq = tvlUsd / q;
+  const L = Vq * _test.lPerDollar(P, bandW);
+  return {
+    address: "P".repeat(44), price: String(P), tvlUsdc: String(tvlUsd), feeRate: 100,
+    tokenA: { symbol: "WRAP", decimals: decA }, tokenB: { symbol: "USDC", decimals: decB },
+    tokenBalanceA: String(Math.round(tvlUsd / 2 * 10 ** decA)), tokenBalanceB: String(Math.round(tvlUsd / 2 * 10 ** decB)),
+    liquidity: String(Math.round(L * 10 ** ((decA + decB) / 2))),
+    stats: { "24h": { volume: String(fees24 / 0.0001), fees: String(fees24) }, "7d": { volume: "1", fees: String(fees24 * 7) }, "30d": { volume: "1", fees: String(fees24 * 30) } },
+    priceHistory7d: hist(14, sigma / Math.sqrt(2), P)
+  };
+}
+const peg = _test.score(buildPegged(), null, "24h", 30, 1000, { solPriceUsd: 100 });
+ok("pool with concentration >> 100 stays on the liquidity basis", peg.basis === "liquidity" && peg.concentration > 100,
+   `basis=${peg.basis} concentration=${peg.concentration?.toFixed(0)}`);
+ok("edge = edgeTvl / concentration (identity, not a fitted number)", close(peg.edge, peg.edgeTvl / peg.concentration, 1e-6),
+   `${peg.edge.toFixed(3)} vs ${(peg.edgeTvl / peg.concentration).toFixed(3)}`);
+ok("edge is nowhere near the 1000x+ the TVL fallback used to report", peg.edge < peg.edgeTvl / 100,
+   `edge ${peg.edge.toFixed(2)} vs TVL-basis ${peg.edgeTvl.toFixed(0)}`);
+ok("barely-moving pool is flagged pegged; a normal one is not", peg.pegged === true && inUsdc.pegged === false);
+ok("concentration of an ordinary pool is small and positive", inUsdc.concentration > 0.5 && inUsdc.concentration < 50,
+   inUsdc.concentration?.toFixed(2));
+
+console.log("\nEdge accuracy: net after trading costs (what the ranking uses)");
+const nr = baseRes;
+ok("friction = costs.totalUsd / hold / position", close(nr.friction, nr.costs.totalUsd / 30 / 1000, 1e-9));
+ok("netAllIn = netDay - friction", close(nr.netAllIn, nr.netDay - nr.friction, 1e-9));
+ok("friction is a real cost (> 0) and netAllIn < netDay", nr.friction > 0 && nr.netAllIn < nr.netDay);
+ok("edgeNet > 1 exactly when netAllIn > 0",
+   [baseRes, loserRes, inUsdc, inZec, peg].every(r => r.netAllIn === null || ((r.edgeNet > 1) === (r.netAllIn > 0))),
+   [baseRes, loserRes, inUsdc].map(r => `${r.edgeNet?.toFixed(2)}/${(r.netAllIn * 1000)?.toFixed(2)}`).join(" "));
+ok("edgeNet <= pool-level edge (costs can only lower it, for a negligible own-share)",
+   baseRes.edgeNet <= baseRes.edge * 1.0001, `${baseRes.edgeNet.toFixed(3)} vs ${baseRes.edge.toFixed(3)}`);
+ok("every profile carries netAllIn and it is below its gross net",
+   ["conservador", "moderado", "agressivo"].every(k => profs[k].netAllIn !== null && profs[k].netAllIn < profs[k].netDay));
+ok("moderado netAllIn matches the top level", close(profs.moderado.netAllIn, baseRes.netAllIn, 1e-9));
+// Same economics, 1% fee tier vs 0.16%: every swap costs more, so the net after costs must be lower.
+const cheapTier = _test.score(costPool, null, "24h", 30, 1000, { solPriceUsd: 100 });
+const dearTier = _test.score({ ...costPool, feeRate: 10000 }, null, "24h", 30, 1000, { solPriceUsd: 100 });
+ok("higher fee tier -> higher friction (swap leg)", dearTier.friction > cheapTier.friction,
+   `${(cheapTier.friction * 1000).toFixed(3)} -> ${(dearTier.friction * 1000).toFixed(3)} $/1k/day`);
+
+console.log("\nEdge accuracy: hedge size follows the range");
+ok("hairline range -> 50% of the position is the volatile leg", close(_test.hedgeRatioFor(0.0005), 0.5, 1e-3));
+ok("wider range -> smaller hedge (0.45 at +-20%, 0.39 at +-50%)",
+   close(_test.hedgeRatioFor(0.2), 0.452, 0.01) && close(_test.hedgeRatioFor(0.5), 0.385, 0.01),
+   `${_test.hedgeRatioFor(0.2).toFixed(3)} / ${_test.hedgeRatioFor(0.5).toFixed(3)}`);
+ok("volatile token on the quote side flips the share", close(_test.hedgeRatioFor(0.2, { volatileIsQuote: true }), 1 - _test.hedgeRatioFor(0.2), 1e-12));
+ok("two volatile tokens -> both legs hedged (100%)", _test.hedgeRatioFor(0.2, { bothVolatile: true }) === 1);
+ok("scored hedgeRatioUsed matches the range of the moderate profile",
+   close(baseRes.hedgeRatioUsed, _test.hedgeRatioFor(baseRes.width), 1e-9), baseRes.hedgeRatioUsed.toFixed(4));
+const bothVol = { ...costPool, tokenA: { symbol: "AAA", decimals: 9 }, tokenB: { symbol: "BBB", decimals: 8 } };
+const bvRes = _test.score(bothVol, null, "24h", 30, 1000, { solPriceUsd: 100 });
+ok("pool with two volatile tokens uses a ~100% hedge and pays more perp cost",
+   bvRes.hedgeRatioUsed === 1 && bvRes.costs.hedgeUsd > baseRes.costs.hedgeUsd * 2, `${bvRes.costs.hedgeUsd.toFixed(3)} vs ${baseRes.costs.hedgeUsd.toFixed(3)}`);
+const pinned = _test.score(costPool, null, "24h", 30, 1000, { solPriceUsd: 100, hedgeRatio: 0.5 });
+ok("an explicit hedgeRatio overrides the derived one", pinned.hedgeRatioUsed === 0.5);
+
+console.log("\nEdge accuracy: fee windows");
+const blendPool = build({ basePriceUsd: 100, tvlUsd: 1500000, fees24: 3500, sigma: 0.025, quotePriceUsd: 1 });
+blendPool.stats["24h"].fees = "6000"; blendPool.stats["7d"].fees = String(3500 * 7); blendPool.stats["30d"].fees = String(2500 * 30);
+const bl = _test.score(blendPool, null, "blend", 30, 1000, { solPriceUsd: 100 });
+const expectBlend = 0.3 * 6000 + 0.5 * 3500 + 0.2 * 2500;
+ok("blend = 30/50/20 mix of the 24h, 7d and 30d daily fees", close(bl.feesPerDay, expectBlend, 1e-9), `${bl.feesPerDay.toFixed(1)} vs ${expectBlend}`);
+ok("blend reports itself and counts as present", bl.usedPeriod === "blend" && bl.haveTf === true);
+ok("blend sits between the 24h and 30d figures",
+   bl.feesPerDay < _test.score(blendPool, null, "24h", 30).feesPerDay && bl.feesPerDay > _test.score(blendPool, null, "30d", 30).feesPerDay);
+const blThin = { ...blendPool, stats: { "24h": blendPool.stats["24h"] } };
+ok("blend with a single window available falls back to 24h", _test.score(blThin, null, "blend", 30).usedPeriod === "24h");
+// A pool 10 days old has only 10 days of fees inside its "30d" figure.
+const young10 = { ...blendPool, stats: { ...blendPool.stats, "30d": { volume: "1", fees: String(3000 * 10) } } };
+const y10 = _test.score(young10, { pairCreatedAt: Date.now() - 10 * 864e5 }, "30d", 30, 1000, { solPriceUsd: 100 });
+ok("30d window on a 10-day-old pool divides by its age, not by 30", close(y10.feesPerDay, 3000, 0.01), y10.feesPerDay.toFixed(0));
+const y10b = _test.score(young10, null, "30d", 30, 1000, { solPriceUsd: 100 });
+ok("without a known age the nominal window is kept", close(y10b.feesPerDay, 3000 * 10 / 30, 1e-9));
+
 console.log("\nFeature A: venue parsing with fixtures, ranking, and isolated failure");
 const jupFixture = {
   longAvailableLiquidity: "10000000.00",

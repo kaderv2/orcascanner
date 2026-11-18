@@ -1,6 +1,9 @@
 // GET /api/pools          -> every Orca Whirlpool, scored and ranked (thin pools excluded)
 // GET /api/pools?debug=1  -> crawl log, which stats periods arrived, raw first pool + its score
 //
+// Ranking: by netAllIn = earns - needs(LVR) - friction/day (swap, perp fees, funding, rebalances, amortised over hold).
+//          edge = pool-level fees / LVR; edgeNet = earns / (needs + friction), > 1 exactly when netAllIn > 0.
+//
 // Query: hold, posUsd (or pos), tf, size, maxPages (total page budget), crawlMinTvl (dust floor sent to Orca, default 1000),
 //        minTvl=250000, minVol24=50000, minAgeDays=7 -> pools below any of these, or with an effective fee of 0,
 //        are flagged thin:true + thinReason and left out of the ranking unless includeThin=1.
@@ -9,7 +12,9 @@
 //          lpTxCount=3              txs per LP open/close cycle (swap + open + close; position rent is refundable = 0)
 //          tickArrayRentSol=0       non-refundable tick-array init rent in SOL (0 when already initialized)
 //          swapSlippage=0.001       0.1% slippage on the ~50% balancing swap (plus 0.5*effectiveFeeRate)
-//          hedgeRatio=0.5           short perp notional as fraction of posUsd (~50% volatile side)
+//          hedgeRatio=<omitted>     short perp notional as fraction of posUsd. Omitted = derived from the range
+//                                   (volatile share of the position at the centre: ~0.45 at +-20%, ~0.39 at +-50%;
+//                                   1.0 when both tokens are volatile). Pass a number to pin it.
 //          perpTakerFee=0.0005      perp taker fee per side (open + close = 2 * perpTakerFee * hedgeRatio * posUsd)
 //          perpFundingDaily=0.0001  daily funding/borrow rate on short notional (can be negative when shorts are paid)
 //          solPriceUsd              optional override; otherwise derived from SOL/USDC pool (Orca or DexScreener)
@@ -29,29 +34,13 @@
 
 try { require("node:dns").setDefaultResultOrder?.("ipv4first"); } catch {}
 
+const SCORING = require("./scoring.js");
+const { STABLE, COST_DEFAULTS, PERIOD_HOURS, num, score, thinReasons, effectiveFeeRate, extractSolPriceUsd } = SCORING;
+
 const ORCA = "https://api.orca.so/v2/solana/pools";
 const DS = "https://api.dexscreener.com/latest/dex/pairs/solana/";
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-const STABLE = new Set(["USDC","USDT","PYUSD","FDUSD","USDS","DAI","USDG","USDE","CASH","EURC","USD1","SUSD"]);
-const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-
-// Default cost model parameters for delta-neutral LP + short perp hedge.
-const COST_DEFAULTS = {
-  solTxCostSol: 0.00002,   // SOL fee per transaction
-  lpTxCount: 3,            // transactions per LP open/close cycle (position rent is refundable = 0)
-  tickArrayRentSol: 0,     // non-refundable tick-array init rent in SOL
-  swapSlippage: 0.001,     // 0.1% slippage on the ~50% balancing swap
-  hedgeRatio: 0.5,         // short perp notional / posUsd (~50% volatile leg)
-  perpTakerFee: 0.0005,    // perp taker fee per side (charged on open + close)
-  perpFundingDaily: 0.0001 // daily perp funding/borrow rate on short notional (can be negative)
-};
-
-const WIDTH_MIN = 0.03;
-const WIDTH_MAX = 0.85;
-const PROFILE_KS = { conservador: 2.0, moderado: 1.5, agressivo: 1.0 };
 
 // Orca's own fee accounting, at every period it publishes.
-const PERIOD_HOURS = { "5m":1/12, "15m":0.25, "30m":0.5, "1h":1, "2h":2, "4h":4, "8h":8, "24h":24, "7d":168, "30d":720 };
 const ALL_PERIODS = Object.keys(PERIOD_HOURS).join(",");
 
 /* ---------------- Orca crawl ---------------- */
@@ -147,366 +136,6 @@ async function enrich(addresses) {
   return out;
 }
 
-/* ---------------- maths ---------------- */
-function volAndAge(series) {
-  if (!Array.isArray(series) || !series.length) return { sigma: null, ageDays: null };
-  const slots = series.length, hps = (7 * 24) / Math.max(1, slots - 1);
-  const p = series.map(num).filter(v => v > 0);
-  const ageDays = p.length >= slots ? null : Math.max(0.5, ((p.length - 1) * hps) / 24);
-  if (p.length < 4) return { sigma: null, ageDays };
-  const r = [];
-  for (let i = 1; i < p.length; i++) r.push(Math.log(p[i] / p[i - 1]));
-  const m = r.reduce((a, b) => a + b, 0) / r.length;
-  const v = r.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, r.length - 1);
-  return { sigma: Math.sqrt(v) * Math.sqrt(24 / hps), ageDays };
-}
-
-// Fallback volatility for pools too young for a 7-day series.
-// E|move over T| = sigma_daily * sqrt(T/24) * sqrt(2/pi); invert each window, take the median.
-function sigmaFromChanges(pcObj) {
-  if (!pcObj) return null;
-  const est = [];
-  for (const [k, hrs] of [["m5", 5/60], ["h1", 1], ["h6", 6], ["h24", 24]]) {
-    const d = Math.abs(num(pcObj[k])) / 100;
-    if (d > 0) est.push((d / 0.7979) * Math.sqrt(24 / hrs));
-  }
-  if (!est.length) return null;
-  est.sort((a, b) => a - b);
-  const mid = Math.floor(est.length / 2);
-  return est.length % 2 ? est[mid] : (est[mid - 1] + est[mid]) / 2;
-}
-
-function lPerDollar(P, w) {
-  const s = Math.sqrt(P);
-  const val = (1 / s - 1 / Math.sqrt(P * (1 + w))) * P + (s - Math.sqrt(P * (1 - w)));
-  return val > 0 ? 1 / val : 0;
-}
-function humanL(rawL, decA, decB) {
-  const L = parseFloat(rawL), d = (Number(decA) + Number(decB)) / 2;
-  return Number.isFinite(L) && L > 0 && Number.isFinite(d) ? L / Math.pow(10, d) : null;
-}
-
-// What one unit of tokenB is worth in dollars, from the pool's own balances.
-// Liquidity maths is denominated in tokenB; fees are reported in dollars. Without this
-// conversion a SOL-quoted pool overstates its edge by roughly the SOL price.
-function quoteUsd(pool, price) {
-  const decA = Number(pool.tokenA?.decimals), decB = Number(pool.tokenB?.decimals);
-  const ba = parseFloat(pool.tokenBalanceA), bb = parseFloat(pool.tokenBalanceB);
-  const tvl = num(pool.tvlUsdc);
-  if (![decA, decB, ba, bb].every(Number.isFinite) || !(tvl > 0) || !(price > 0)) return null;
-  const valueInB = (ba / 10 ** decA) * price + (bb / 10 ** decB);
-  if (!(valueInB > 0)) return null;
-  const q = tvl / valueInB;
-  return Number.isFinite(q) && q > 0 ? q : null;
-}
-
-// Orca v2 rates are in hundredths of a basis point (1e6 = 100%). feeRate is the static base fee;
-// adaptiveFee.currentRate is only the variable surcharge (often 0), capped by adaptiveFee.maxRate.
-// Effective = base + variable, under the program's 10% hard limit — never 0 while the base is > 0.
-const FEE_RATE_HARD_LIMIT = 100000;
-function effectiveFeeRate(pool) {
-  const base = Math.max(0, num(pool?.feeRate));
-  const af = pool?.adaptiveFeeEnabled && pool.adaptiveFee ? pool.adaptiveFee : null;
-  let variable = af ? Math.max(0, num(af.currentRate)) : 0;
-  if (af && num(af.maxRate) > 0) variable = Math.min(variable, num(af.maxRate));
-  return { base, variable, total: Math.min(base + variable, FEE_RATE_HARD_LIMIT) };
-}
-
-// A full 7-day series (no empty leading slots) proves the pool is at least about a week old.
-const fullHistory = s => Array.isArray(s) && s.length > 1 && s.every(v => num(v) > 0);
-
-// Why a scored pool is too thin to rank; [] when it is fine.
-function thinReasons(s, pool, { minTvl = 250000, minVol24 = 50000, minAgeDays = 7 } = {}) {
-  const r = [];
-  if (!(s.feeRate > 0)) r.push("fee 0");
-  if (s.tvl < minTvl) r.push(`tvl<${minTvl}`);
-  if (s.vol24 < minVol24) r.push(`vol24<${minVol24}`);
-  if (minAgeDays > 0) {
-    if (s.ageDays != null) { if (s.ageDays < minAgeDays) r.push(`age ${s.ageDays.toFixed(1)}d<${minAgeDays}d`); }
-    else if (!(fullHistory(pool?.priceHistory7d) && minAgeDays <= 7)) r.push("age unknown");
-  }
-  return r;
-}
-
-const isSolToken = t => t?.address === SOL_MINT || (t?.symbol || "").toUpperCase() === "SOL";
-
-function inferPoolSolPrice(pool) {
-  const price = num(pool?.price);
-  if (!(price > 0)) return null;
-  const symA = (pool?.tokenA?.symbol || "").toUpperCase();
-  const symB = (pool?.tokenB?.symbol || "").toUpperCase();
-  if (isSolToken(pool?.tokenA) && STABLE.has(symB)) return price;
-  if (isSolToken(pool?.tokenB) && STABLE.has(symA)) return 1 / price;
-  return null;
-}
-
-// Derive SOL/USD from the highest-TVL SOL/stable pool in Orca's response, falling back to
-// quoteUsd on a */SOL pool or DexScreener's priceUsd.
-function extractSolPriceUsd(pools = [], dsMap = null) {
-  let best = null, bestScore = -1;
-  for (const p of pools) {
-    const px = inferPoolSolPrice(p);
-    if (!(px > 0)) continue;
-    const symA = (p.tokenA?.symbol || "").toUpperCase(), symB = (p.tokenB?.symbol || "").toUpperCase();
-    const isSolMint = (p.tokenA?.address === SOL_MINT) || (p.tokenB?.address === SOL_MINT);
-    const isUsdc = symA === "USDC" || symB === "USDC";
-    const tvl = num(p.tvlUsdc);
-    const rank = (isSolMint ? 1e14 : 0) + (isUsdc ? 1e12 : 0) + tvl;
-    if (rank > bestScore) { bestScore = rank; best = px; }
-  }
-  if (best) return best;
-
-  let bestTvl = -1;
-  for (const p of pools) {
-    if (!isSolToken(p?.tokenB)) continue;
-    const q = quoteUsd(p, num(p.price));
-    const tvl = num(p.tvlUsdc);
-    if (q > 0 && tvl > bestTvl) { bestTvl = tvl; best = q; }
-  }
-  if (best) return best;
-
-  if (dsMap) {
-    for (const pair of dsMap.values()) {
-      const bt = pair?.baseToken;
-      if ((bt?.address === SOL_MINT || (bt?.symbol || "").toUpperCase() === "SOL") && num(pair.priceUsd) > 0) {
-        return num(pair.priceUsd);
-      }
-    }
-  }
-  return null;
-}
-
-function evalWidth(width, posUsd, ctx) {
-  const { price, sigma, basis, costPerL, qUsd, L, feesPerDay, tvl, yTvl } = ctx;
-  if (!(width > 0) || !(price > 0) || sigma === null) {
-    return { earns: null, needs: null, netDay: null, share: null, conc: null };
-  }
-  const lp = lPerDollar(price, width);
-  let earns, needs, share;
-  if (basis === "liquidity") {
-    // lp is liquidity per ONE QUOTE TOKEN of position value, so dividing by the quote
-    // token's dollar price turns both sides into a yield on dollars.
-    needs = costPerL * lp / qUsd;
-    // Your own deposit joins the active liquidity and dilutes the fee per unit, which
-    // matters enormously in a small pool. Model the share you would actually hold.
-    const Lme = (posUsd / qUsd) * lp;
-    share = L && L > 0 ? Lme / (L + Lme) : 1;
-    earns = (feesPerDay * share) / posUsd;
-  } else {
-    const k = lp / lPerDollar(price, 0.5);
-    needs = ((sigma * sigma) / 8) * k;
-    share = tvl > 0 ? posUsd / (tvl + posUsd) : 1;
-    earns = yTvl * k * (tvl > 0 ? tvl / (tvl + posUsd) : 1);
-  }
-  const netDay = earns - needs;
-  const conc = yTvl > 0 ? earns / yTvl : null; // how much better than the pool average
-  return { earns, needs, netDay, share, conc };
-}
-
-function calcCostRates(width, holdDays, rate, sigma, costOpts) {
-  const solPrice = num(costOpts.solPriceUsd);
-  const fixedOnceUsd = (costOpts.solTxCostSol * costOpts.lpTxCount + costOpts.tickArrayRentSol) * solPrice;
-  // Mean first-exit time of Brownian motion from [-width, +width] is (width/sigma)^2 days.
-  const rebalances = (width > 0 && sigma !== null) ? holdDays * (sigma / width) ** 2 : 0;
-  // Balancing ~50% of posUsd pays pool fee + slippage on the swapped half.
-  const swapOnceRate = 0.5 * (rate + costOpts.swapSlippage);
-  const hedgeFeeRate = 2 * costOpts.perpTakerFee * costOpts.hedgeRatio;
-  const fundingRateHold = costOpts.perpFundingDaily * costOpts.hedgeRatio * holdDays;
-  return { fixedOnceUsd, rebalances, swapOnceRate, hedgeFeeRate, fundingRateHold };
-}
-
-function costsAtPos(posUsd, rates) {
-  const lpFixedUsd = rates.fixedOnceUsd * (1 + rates.rebalances);
-  const swapUsd = posUsd * rates.swapOnceRate * (1 + rates.rebalances);
-  const hedgeUsd = posUsd * rates.hedgeFeeRate;
-  const fundingUsd = posUsd * rates.fundingRateHold;
-  return {
-    lpFixedUsd,
-    swapUsd,
-    hedgeUsd,
-    fundingUsd,
-    rebalances: rates.rebalances,
-    totalUsd: lpFixedUsd + swapUsd + hedgeUsd + fundingUsd
-  };
-}
-
-// Find smallest posUsd in [10, 1e7] where expected profit over holdDays >= total costs.
-// Because dilution makes netProfit(posUsd) concave (often peaking and then falling negative as
-// posUsd -> 1e7), we locate the peak via golden-section search in log-space, then binary-search
-// [10, xPeak] for the breakeven root.
-function solveMinPosUsd(width, holdDays, ctx, costOpts) {
-  if (!(width > 0) || !(ctx.price > 0) || ctx.sigma === null) {
-    return { minPosUsd: null, minPosReason: "missing price or volatility" };
-  }
-  const rates = calcCostRates(width, holdDays, ctx.rate, ctx.sigma, costOpts);
-  const profit = pUsd => {
-    const ev = evalWidth(width, pUsd, ctx);
-    if (ev.netDay === null) return null;
-    return ev.netDay * holdDays * pUsd - costsAtPos(pUsd, rates).totalUsd;
-  };
-  const MIN_POS = 10, MAX_POS = 1e7;
-  const fMin = profit(MIN_POS);
-  if (fMin === null || !Number.isFinite(fMin)) {
-    return { minPosUsd: null, minPosReason: "insufficient pool data" };
-  }
-  if (fMin >= 0) return { minPosUsd: MIN_POS, minPosReason: null };
-
-  const PHI = (Math.sqrt(5) - 1) / 2;
-  let lo = Math.log(MIN_POS), hi = Math.log(MAX_POS);
-  let x1 = hi - PHI * (hi - lo), x2 = lo + PHI * (hi - lo);
-  let f1 = profit(Math.exp(x1)), f2 = profit(Math.exp(x2));
-  for (let i = 0; i < 80; i++) {
-    if (f1 < f2) {
-      lo = x1; x1 = x2; f1 = f2;
-      x2 = lo + PHI * (hi - lo); f2 = profit(Math.exp(x2));
-    } else {
-      hi = x2; x2 = x1; f2 = f1;
-      x1 = hi - PHI * (hi - lo); f1 = profit(Math.exp(x1));
-    }
-  }
-  const xPeak = Math.exp((lo + hi) / 2);
-  const fPeak = profit(xPeak);
-  const fMax = profit(MAX_POS);
-  if (Math.max(fPeak, fMax) < 0) {
-    const ev0 = evalWidth(width, 1e-6, ctx);
-    const propCostHold = rates.swapOnceRate * (1 + rates.rebalances) + rates.hedgeFeeRate + rates.fundingRateHold;
-    const reason = (ev0.netDay !== null && ev0.netDay * holdDays <= propCostHold)
-      ? "yield does not cover IL/LVR and proportional costs"
-      : "fixed/rebalance costs exceed max profit after dilution";
-    return { minPosUsd: null, minPosReason: reason };
-  }
-
-  let a = MIN_POS, b = fPeak >= 0 ? xPeak : MAX_POS;
-  for (let i = 0; i < 60; i++) {
-    const mid = (a + b) / 2;
-    if (profit(mid) >= 0) b = mid; else a = mid;
-  }
-  return { minPosUsd: b, minPosReason: null };
-}
-
-function calcBreakevenDays(width, holdDays, posUsd, netDay, ctx, costOpts) {
-  if (netDay === null || !(width > 0) || !(ctx.price > 0) || ctx.sigma === null) return null;
-  const rates = calcCostRates(width, holdDays, ctx.rate, ctx.sigma, costOpts);
-  const initialCost = rates.fixedOnceUsd + posUsd * (rates.swapOnceRate + rates.hedgeFeeRate);
-  const rebalPerDay = (rates.fixedOnceUsd + posUsd * rates.swapOnceRate) * ((ctx.sigma / width) ** 2);
-  const fundingPerDay = posUsd * costOpts.perpFundingDaily * costOpts.hedgeRatio;
-  const dailyNet = netDay * posUsd - fundingPerDay - rebalPerDay;
-  if (!(dailyNet > 0)) return null;
-  return Math.max(0, initialCost / dailyNet);
-}
-
-function score(pool, ds, tfKey, holdDays, posUsd = 1000, opts = {}) {
-  const costOpts = {
-    ...COST_DEFAULTS,
-    ...opts,
-    solPriceUsd: opts.solPriceUsd ?? inferPoolSolPrice(pool) ?? 0
-  };
-  const stats = pool.stats || {};
-  const tvl = num(pool.tvlUsdc), price = num(pool.price);
-  const s24 = stats["24h"] || {}, s7 = stats["7d"] || {}, s30 = stats["30d"] || {};
-  const A = pool.tokenA || {}, B = pool.tokenB || {};
-  const stableA = STABLE.has((A.symbol || "").toUpperCase()), stableB = STABLE.has((B.symbol || "").toUpperCase());
-
-  const ov = volAndAge(pool.priceHistory7d);
-  const dsSigma = sigmaFromChanges(ds?.priceChange);
-  const sigma = ov.sigma !== null && ov.ageDays === null ? ov.sigma : (ov.sigma ?? dsSigma);
-  const sigmaSrc = ov.sigma !== null ? "orca7d" : (dsSigma !== null ? "dexscreener" : null);
-  const created = ds?.pairCreatedAt ? Number(ds.pairCreatedAt) : null;
-  const ageDays = created ? Math.max(0, (Date.now() - created) / 864e5) : ov.ageDays;
-
-  // Fees per day over the chosen period, straight from Orca's own accounting.
-  const want = stats[tfKey], haveTf = !!(want && want.fees !== undefined);
-  const useKey = haveTf ? tfKey : (stats["24h"] ? "24h" : "7d");
-  const useHours = PERIOD_HOURS[useKey] ?? 24;
-  const used = stats[useKey] || {};
-  const feesPerDay = num(used.fees) * (24 / useHours);
-  const windowVol = num(used.volume);
-
-  const fee = effectiveFeeRate(pool);
-  const rate = fee.total / 1e6;
-
-  const qUsd = stableB ? 1 : quoteUsd(pool, price);
-  const L = humanL(pool.liquidity, A.decimals, B.decimals);
-  const feePerL = L ? feesPerDay / L : null;                    // dollars per unit of liquidity
-  const costPerL = (sigma !== null && price > 0 && qUsd)
-    ? (sigma * sigma * Math.sqrt(price) / 4) * qUsd : null;     // converted to dollars too
-
-  const yTvl = tvl > 0 ? feesPerDay / tvl : 0;
-  const edgeTvl = sigma !== null && sigma > 0 ? yTvl / ((sigma * sigma) / 8) : null;
-
-  let basis = "liquidity";
-  let edge = feePerL !== null && costPerL ? feePerL / costPerL : null;
-  // A pool's concentration lifts the liquidity-basis figure above the full-range one, but
-  // only by a sane multiple. Anything wilder means the liquidity or balance data is off.
-  const ratio = edge !== null && edgeTvl ? edge / edgeTvl : null;
-  if (edge === null || !Number.isFinite(edge) || (ratio !== null && (ratio > 100 || ratio < 0.01))) {
-    edge = edgeTvl; basis = "tvl";
-  }
-
-  const ctx = { price, sigma, basis, costPerL, qUsd, L, feesPerDay, tvl, yTvl, rate };
-  const profiles = {};
-  for (const [name, k] of Object.entries(PROFILE_KS)) {
-    const w = sigma !== null ? Math.max(WIDTH_MIN, Math.min(WIDTH_MAX, k * sigma * Math.sqrt(holdDays))) : null;
-    const ev = evalWidth(w, posUsd, ctx);
-    const rebal = (w && sigma !== null) ? holdDays * (sigma / w) ** 2 : null;
-    const minSol = solveMinPosUsd(w, holdDays, ctx, costOpts);
-    profiles[name] = {
-      k,
-      widthPct: w !== null ? w * 100 : null,
-      lower: (w !== null && price > 0) ? price * (1 - w) : null,
-      upper: (w !== null && price > 0) ? price * (1 + w) : null,
-      expectedRebalances: rebal,
-      netDay: ev.netDay,
-      netPer1k: ev.netDay !== null ? ev.netDay * 1000 : null,
-      minPosUsd: minSol.minPosUsd,
-      minPosReason: minSol.minPosReason
-    };
-  }
-
-  // Top-level fields stay anchored to the moderate profile (k=1.5) for backward compatibility.
-  const mod = profiles.moderado;
-  const width = mod.widthPct !== null ? mod.widthPct / 100 : null;
-  const modEval = evalWidth(width, posUsd, ctx);
-  const { earns, needs, netDay, share, conc } = modEval;
-  const costs = (width && price > 0 && sigma !== null)
-    ? costsAtPos(posUsd, calcCostRates(width, holdDays, rate, sigma, costOpts))
-    : null;
-  const breakevenDays = calcBreakevenDays(width, holdDays, posUsd, netDay, ctx, costOpts);
-
-  const y24 = tvl > 0 ? num(s24.fees) / tvl : 0;
-  const y7 = tvl > 0 ? num(s7.fees) / 7 / tvl : 0;
-  const y30 = tvl > 0 ? num(s30.fees) / 30 / tvl : 0;
-
-  return {
-    address: pool.address,
-    pair: `${A.symbol || "?"}/${B.symbol || "?"}`,
-    base: stableA && !stableB ? B.symbol : A.symbol,
-    quote: stableA && !stableB ? A.symbol : B.symbol,
-    bothVolatile: !stableA && !stableB,
-    stablePair: stableA && stableB,
-    feeRate: rate * 100,
-    feeRateBase: fee.base / 1e4, feeRateAdaptive: fee.variable / 1e4,   // percent
-    feeRateRealized24h: num(s24.volume) > 0 ? (num(s24.fees) / num(s24.volume)) * 100 : null,
-    adaptiveFee: !!pool.adaptiveFeeEnabled,
-    price, quoteUsd: qUsd, tvl,
-    vol24: num(s24.volume), windowVol, haveTf, usedPeriod: useKey,
-    volOverTvl: tvl > 0 ? num(s24.volume) / tvl : 0,
-    yield24: y24, yield7d: y7, yield30d: y30,
-    trend: (y7 > 0 && y30 > 0) ? y7 / y30 : null,
-    spike: (y7 > 0 && y24 > 3 * y7),
-    sigma, sigmaSrc, created, ageDays,
-    poolAvg: yTvl, feesPerDay, activeL: L, share, conc, posUsd,
-    edge, edgeTvl, basis, width, earns, needs, netDay,
-    netPer1k: netDay !== null ? netDay * 1000 : null,
-    minPosUsd: mod.minPosUsd,
-    minPosReason: mod.minPosReason,
-    breakevenDays,
-    costs,
-    profiles,
-    dsUrl: ds?.url || null, onDs: !!ds
-  };
-}
-
 // Numeric query param with a default; an explicit 0 is honoured (e.g. minTvl=0 turns that gate off).
 const param = (q, k, def) => (q[k] === undefined || q[k] === "" || !Number.isFinite(parseFloat(q[k])))
   ? def : Math.max(0, parseFloat(q[k]));
@@ -521,7 +150,7 @@ module.exports = async (req, res) => {
     const hold = Math.max(1, Math.min(365, num(q.hold) || num(q.holdDays) || 30));
     const rawPos = q.posUsd !== undefined && q.posUsd !== "" ? parseFloat(q.posUsd) : parseFloat(q.pos);
     const pos = Math.max(1, Math.min(1e7, Number.isFinite(rawPos) && rawPos > 0 ? rawPos : 1000));
-    const tfKey = PERIOD_HOURS[q.tf] ? q.tf : "24h";
+    const tfKey = (PERIOD_HOURS[q.tf] || q.tf === "blend") ? q.tf : "24h";
     const filters = {
       minTvl: param(q, "minTvl", 250000),
       minVol24: param(q, "minVol24", 50000),
@@ -552,7 +181,7 @@ module.exports = async (req, res) => {
       lpTxCount: param(q, "lpTxCount", COST_DEFAULTS.lpTxCount),
       tickArrayRentSol: param(q, "tickArrayRentSol", COST_DEFAULTS.tickArrayRentSol),
       swapSlippage: param(q, "swapSlippage", COST_DEFAULTS.swapSlippage),
-      hedgeRatio: param(q, "hedgeRatio", COST_DEFAULTS.hedgeRatio),
+      hedgeRatio: param(q, "hedgeRatio", COST_DEFAULTS.hedgeRatio), // null unless pinned: derived from each range otherwise
       perpTakerFee: param(q, "perpTakerFee", COST_DEFAULTS.perpTakerFee),
       perpFundingDaily: signedParam(q, "perpFundingDaily", COST_DEFAULTS.perpFundingDaily),
       solPriceUsd
@@ -584,7 +213,8 @@ module.exports = async (req, res) => {
     }
     const thin = scored.filter(p => p.thin).length;
     const pools = filters.includeThin ? scored : scored.filter(p => !p.thin);
-    pools.sort((a, b) => (b.netDay ?? -1e9) - (a.netDay ?? -1e9));
+    // Ranked by what the position clears per day after movement cost AND trading costs (not by the gross netDay).
+    pools.sort((a, b) => (b.netAllIn ?? -1e9) - (a.netAllIn ?? -1e9));
     res.json({
       at: Date.now(), scanned: raw.length, returned: pools.length, cursorKey,
       pages, crawl: crawlInfo, filters, thin, thinCounts,
@@ -598,6 +228,4 @@ module.exports = async (req, res) => {
     res.status(502).json({ error: String(e?.message || e) });
   }
 };
-module.exports._test = { volAndAge, sigmaFromChanges, lPerDollar, humanL, quoteUsd, score, PERIOD_HOURS,
-  nextCursor, effectiveFeeRate, thinReasons, fullHistory,
-  COST_DEFAULTS, PROFILE_KS, extractSolPriceUsd, solveMinPosUsd, calcBreakevenDays };
+module.exports._test = { ...SCORING, nextCursor };
