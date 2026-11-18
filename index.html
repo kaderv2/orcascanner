@@ -70,6 +70,12 @@ section[hidden]{display:none}
 .dcell .v{font-weight:700}
 .dcell .k{font-size:.69rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
 .verdict{font-size:.92rem;margin:0 0 8px}
+.ptable{width:100%;border-collapse:collapse;margin:8px 0 10px;font-size:.82rem;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ptable th,.ptable td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.ptable th{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);position:static;cursor:default}
+.ptable th:first-child,.ptable td:first-child{text-align:left}
+.ptable tr:last-child td{border-bottom:0}
+.disclaimer{font-size:.8rem;color:var(--mute);margin:8px 0 0}
 .foot{margin-top:16px;color:var(--mute);font-size:.85rem;max-width:78ch}
 
 /* ---------- plan ---------- */
@@ -95,16 +101,17 @@ section[hidden]{display:none}
 .steps li::before{content:counter(s);display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:.78rem}
 .steps b{display:block}.steps small{color:var(--mute)}
 .splitbar{display:flex;height:11px;border-radius:6px;overflow:hidden;background:var(--line);margin:4px 0 8px}
-.splitbar i{display:block}.splitbar .a{background:var(--lp)}.splitbar .b{background:var(--loss);opacity:.8}
+.splitbar i{display:block}.splitbar .a{background:var(--lp)}.splitbar .b{background:var(--loss);opacity:.8}.splitbar .c{background:var(--accent)}.splitbar .d{background:var(--mute);opacity:.7}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.8rem;color:var(--mute)}
 .legend b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
 .band{background:var(--accent-soft);border-radius:10px;padding:9px 11px;font-size:.9rem;margin:0 0 12px}
 .band.bad{background:rgba(178,58,58,.12);color:var(--loss)}
-#view-plan table{border-collapse:collapse;width:100%;font-size:.85rem}
-#view-plan th,#view-plan td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
-#view-plan th{font-size:.7rem;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
-#view-plan th:first-child,#view-plan td:first-child{text-align:left}
-#view-plan tr.flat td{background:var(--accent-soft)}
+#view-plan table,#view-calc table{border-collapse:collapse;width:100%;font-size:.85rem}
+#view-plan th,#view-plan td,#view-calc th,#view-calc td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+#view-plan th,#view-calc th{font-size:.7rem;text-transform:uppercase;color:var(--mute);letter-spacing:.04em}
+#view-plan th:first-child,#view-plan td:first-child,#view-calc th:first-child,#view-calc td:first-child{text-align:left}
+#view-plan tr.flat td,#view-calc tr.cheapest td{background:var(--accent-soft)}
+.tag.ok{background:rgba(19,122,85,.15);color:var(--gain)}
 .warn{color:var(--loss);font-size:.85rem;margin:8px 0 0}
 .fromscan{background:var(--new-soft);color:var(--new);border-radius:10px;padding:8px 11px;font-size:.86rem;margin:0 0 12px;font-weight:600}
 </style>
@@ -116,6 +123,7 @@ section[hidden]{display:none}
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-scan" aria-selected="true">Find a pool</button>
       <button role="tab" id="tab-plan" aria-selected="false">Plan a position</button>
+      <button role="tab" id="tab-calc" aria-selected="false">Calculadora</button>
     </div>
   </div>
 
@@ -128,10 +136,12 @@ section[hidden]{display:none}
 
   <div class="controls">
     <label>Rank by<select id="rank">
-      <option value="netDay" selected>Net yield per day</option>
-      <option value="edge">Edge (safety margin)</option>
+      <option value="netAllIn" selected>Net yield per day (after costs)</option>
+      <option value="edgeNet">Edge (safety margin)</option>
+      <option value="minPosUsd">Min position ($)</option>
       <option value="ageDays">Newest first</option>
       <option value="earns">Fee yield per day</option>
+      <option value="netDay">Net before trading costs</option>
       <option value="tvl">TVL</option>
       <option value="vol24">Volume 24h</option>
       <option value="volOverTvl">Volume ÷ TVL</option>
@@ -139,7 +149,10 @@ section[hidden]{display:none}
     </select></label>
     <label>Search<input id="q" type="text" placeholder="ZEC, SOL…" spellcheck="false"></label>
     <label>Min TVL ($)<input id="minTvl" type="number" value="0" step="25000"></label>
-    <label>Your position ($)<input id="pos" type="number" value="1000" step="500" min="1"></label>
+    <label>Position ($)<input id="pos" type="number" value="1000" step="100" min="1"></label>
+    <label>Hold (days)<input id="hold" type="number" value="30" step="1" min="1" max="365"></label>
+    <label>Perp taker (%/side)<input id="perpTakerFee" type="number" value="0.05" step="0.01" min="0"></label>
+    <label>Funding/day (%)<input id="perpFundingDaily" type="number" value="0.01" step="0.005"></label>
     <label>Fee window<select id="tf">
       <option value="5m">5 minutes</option>
       <option value="15m">15 minutes</option>
@@ -151,8 +164,8 @@ section[hidden]{display:none}
       <option value="24h" selected>24 hours</option>
       <option value="7d">7 days</option>
       <option value="30d">30 days</option>
+      <option value="blend">Blend 24h · 7d · 30d (steadier)</option>
     </select></label>
-    <label>Hold for<select id="hold"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
     <label>Pairs<select id="kind">
       <option value="all" selected>All pairs</option>
       <option value="stable">Token / stablecoin only</option>
@@ -164,33 +177,39 @@ section[hidden]{display:none}
     <button class="chip newchip" id="cNew" aria-pressed="false">New pools</button>
     <button class="chip" id="cWatch" aria-pressed="false">Watchlist</button>
     <button class="chip" id="cSpike" aria-pressed="false">Hide fee spikes</button>
+    <button class="chip" id="cPeg" aria-pressed="false" title="Pairs that barely move (LSTs, wrapped assets, stable-likes). The model prices no depeg risk for them.">Hide pegged</button>
     <span class="status" id="counts"></span>
   </div>
 
   <div id="err"></div>
   <div class="tablewrap"><table><thead><tr>
     <th data-k="pair">Pool</th>
-    <th data-k="netDay">Net / day</th>
+    <th data-k="netAllIn" title="Fees − movement cost (LVR) − trading costs, per day">Net / day</th>
     <th data-k="poolAvg">Pool avg</th>
     <th data-k="earns">Your earns</th>
-    <th data-k="needs">Needs</th>
-    <th data-k="edge">Edge</th>
+    <th data-k="needs" title="Movement cost (LVR) per day">Needs</th>
+    <th data-k="friction" title="Swap, perp fees, funding, rebalances and gas, amortised over the hold period">Costs</th>
+    <th data-k="edgeNet" title="Fees ÷ (movement cost + trading costs). Above 1 means the position clears a profit.">Edge</th>
     <th data-k="sigma">Moves / day</th>
     <th data-k="width">Range</th>
+    <th data-k="minPosUsd">Min pos</th>
     <th data-k="tvl">TVL</th>
     <th data-k="vol24">Vol 24h</th>
     <th data-k="ageDays">Age</th>
   </tr></thead><tbody id="rows"></tbody></table></div>
 
-  <p class="foot"><b>Fee window</b> picks how recently the fee income is measured, using Orca's own figures for each period — the same ten windows its own interface offers. Short windows surface pools that only started trading today, but five minutes of fees extrapolated to a daily rate is extremely noisy, so confirm on 24 hours or 7 days before acting. <b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it. That's the number that decides whether a pool is worth your money. <b>Edge</b> is the ratio of those two — a safety margin, not a return. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
+  <p class="disclaimer"><b>Estimates only, not a guarantee:</b> Min position, breakeven, expected rebalances, and range profiles are modeled from recent pool fees, 7-day realized volatility, and assumed SOL/swap/perp costs. Realized yields, funding rates, and price paths can differ materially.</p>
+  <p class="foot"><b>Fee window</b> picks how recently the fee income is measured, using Orca's own figures for each period — the same ten windows its own interface offers. Short windows surface pools that only started trading today, but five minutes of fees extrapolated to a daily rate is extremely noisy, so confirm on 24 hours or 7 days before acting. <b>Net per day</b> is the fee yield a position at the suggested range would earn, minus what the token's own movement costs it (<b>Needs</b>), minus the <b>Costs</b> of trading it — swaps, perp fees, funding, rebalances and gas, spread over the hold period. That's the number that decides whether a pool is worth your money. <b>Edge</b> is fees ÷ (Needs + Costs) — a safety margin, not a return; above 1 means the position clears a profit. The <b>Blend</b> window averages the 24h, 7d and 30d fee rates (weights 30/50/20) to damp one-day swings. Click a row, then <b>Plan this pool</b> to carry the numbers across.</p>
 
   <details>
     <summary>Why ranking works this way, and how new pools are spotted</summary>
-    <p><b>Edge alone was misleading.</b> It's a ratio, so a sleepy pool with almost no fees and almost no volatility can score 36× while earning $0.51 a day per $1,000. A busy pool scoring 3× earns $2.41. Ranking uses net yield per day, with edge kept as a second column so you can still see how much headroom a pool has before fees stop covering the movement.</p>
+    <p><b>Edge alone was misleading.</b> It's a ratio, so a sleepy pool with almost no fees and almost no volatility can score 36× while earning $0.51 a day per $1,000. A busy pool scoring 3× earns $2.41. Ranking uses net yield per day <i>after</i> trading costs, with edge kept as a second column so you can still see how much headroom a pool has before fees stop covering what it costs you. Trading costs matter: they run about $0.10–0.40 a day per $1,000, which is a fifth to a half of what most mid-table pools clear, and high-fee tiers (1%) pay more of it on every swap. Ranking by the pre-cost figure flatters those pools.</p>
+    <p><b>Pegged pairs.</b> Tight pairs such as SOL/JitoSOL or cbBTC/WBTC barely move, so the movement cost rounds to zero and a naive edge reads in the thousands. Their liquidity is concentrated hundreds of times tighter than a full-range pool, and the scanner now measures edge on that real liquidity rather than on TVL. They are tagged <b>pegged</b> because the risk that matters — a depeg — is not modeled; hide them with the chip above.</p>
+    <p><b>Hedge size.</b> The short is sized to the delta the position really holds at the centre of its range (about 45% of the position at ±20% and 39% at ±50% when one token is a stablecoin), not a flat 50%. When both tokens are volatile, both legs need a short and the hedge is ~100% of the position, which doubles the perp costs.</p>
     <p><b>Reading them together:</b> high net and edge above 1.5 is the sweet spot. High net with edge near 1 means the pool pays well but has no margin for error — a quiet week kills it. High edge with low net is safe and not worth the effort.</p>
     <p><b>New pools</b> are found from the pool's own 7-day price history. Orca returns 14 slots covering a week, and a pool younger than that has empty leading slots, which gives its age to within half a day. The scanner also remembers every pool address it has seen before in this browser, so anything appearing for the first time is marked even if it's older than a week. Star a pool to keep it on your watchlist.</p>
     <p><b>Short windows are noisy on purpose.</b> A 5-minute window extrapolates five minutes of fees into a daily rate, so a single large swap can make a pool look like it yields hundreds of percent. Use the short windows to notice a pool, then switch to 24 hours or 7 days before believing the number. A row tagged <b>24h data</b> means Orca didn't return the chosen window for that pool, so the 24-hour figure stands in.</p>
-    <p><b>Why a figure here can differ from Orca's own.</b> Orca's position screen quotes the yield for the exact range you've drawn; this table quotes it for the suggested range, which is usually much wider, so the number here is lower. Both also price liquidity in the pool's quote token — for a pool quoted in SOL rather than a stablecoin, that has to be converted to dollars before fees and costs can be compared. Pools where the liquidity figure can't be reconciled fall back to a TVL-based estimate, which the detail panel states.</p>
+    <p><b>Why a figure here can differ from Orca's own.</b> Orca's position screen quotes the yield for the exact range you've drawn; this table quotes it for the suggested range, which is usually much wider, so the number here is lower. Both also price liquidity in the pool's quote token — for a pool quoted in SOL rather than a stablecoin, that has to be converted to dollars before fees and costs can be compared. Pools where the liquidity figure can't be reconciled (missing, or implausibly small against TVL) fall back to a TVL-based estimate, which the detail panel states.</p>
     <p><b>Treat a new pool's numbers as unreliable.</b> A few days of fees on a thin pool says very little, and volatility measured from four price points says less. Watch it for a week before committing anything.</p>
   </details>
 </section>
@@ -263,8 +282,60 @@ section[hidden]{display:none}
     <p><b>Fees and costs.</b> Fee income is your position's value times the daily yield, earned only while in range. Costs are the swap into the token, the perp fee on opening and closing (0.015% post-only, 0.045% market on Hyperliquid, doubled on HIP-3 markets; Aster's maker fee is currently 0%), and funding, which is added when it pays shorts.</p>
   </details>
 </section>
+
+<!-- ====================== CALCULADORA ====================== -->
+<section id="view-calc" role="tabpanel" hidden>
+  <p class="sub">Calcule o maior LP possível dentro de um orçamento máximo em USD (considerando colateral + buffer do short, reserva de ~0,03 SOL e custos de entrada) e compare os custos ao vivo das venues de perp nativas na Solana.</p>
+
+  <div class="panel">
+    <h2>Calculadora de orçamento máximo</h2>
+    <p class="note">Resolve o maior valor <b>P</b> para o LP tal que <b>P + colateral (0,5×P/alav + buffer) + reserva SOL (~0,03 SOL) + custos de entrada ≤ Orçamento B</b>.</p>
+    <div class="fields">
+      <label>Orçamento máx. B ($)<input id="calc-budget" type="number" value="100" min="0" step="10"></label>
+      <label>Pool Orca<select id="calc-pool"></select></label>
+      <label>Perfil de faixa<select id="calc-profile">
+        <option value="conservador">Conservador (2.0×)</option>
+        <option value="moderado" selected>Moderado (1.5×)</option>
+        <option value="agressivo">Agressivo (1.0×)</option>
+      </select></label>
+      <label>Venue do hedge<select id="calc-venue"></select></label>
+      <label>Alavancagem (x)<input id="calc-lev" type="number" value="2" min="1" max="250" step="0.5"></label>
+      <label>Buffer margem (%)<input id="calc-buf" type="number" value="20" min="0" max="200" step="5"></label>
+      <label>Horizonte (dias)<input id="calc-days" type="number" value="7" min="1" max="365" step="1"></label>
+    </div>
+    <div id="calc-status" class="status" style="margin-top:8px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Alocação &amp; viabilidade</h2>
+    <div class="kpis" id="calc-kpis"></div>
+    <div class="splitbar" id="calc-splitbar"></div>
+    <div class="legend" id="calc-legend"></div>
+    <div id="calc-alerts" style="margin-top:12px"></div>
+    <div style="overflow-x:auto;margin-top:10px"><table id="calc-breakdown"></table></div>
+    <p class="disclaimer"><b>Estimativa educacional, não é recomendação:</b> os valores usam snapshot ao vivo das pools da Orca (taxas recentes + volatilidade realizada de 7 dias) e das APIs públicas das venues de perp na Solana. Funding, borrow, taxas e preço podem mudar a qualquer momento.</p>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <div>
+        <h2 style="margin:0">Hedge mais barato agora (Solana)</h2>
+        <p class="note" style="margin:2px 0 0">Comparação ao vivo de short SOL em Jupiter Perps, Pacifica e Drift/Velocity (timeout 8s/venue, falha isolada).</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="status">Notional ($)<input id="hedge-notional" type="number" value="10" min="1" step="5" style="width:86px;margin-left:6px"></label>
+        <label class="status">Dias<input id="hedge-days" type="number" value="7" min="1" step="1" style="width:68px;margin-left:6px"></label>
+        <button class="primary" id="hedge-refresh">Atualizar hedge</button>
+      </div>
+    </div>
+    <div id="hedge-meta" class="status" style="margin-bottom:8px">Carregando venues…</div>
+    <div style="overflow-x:auto"><table id="hedge-table"></table></div>
+  </div>
+</section>
 </div>
 
+<script src="calc.js"></script>
+<script src="scoring.js"></script>
 <script>
 /* ============ shared helpers ============ */
 const $=id=>document.getElementById(id);
@@ -294,132 +365,28 @@ function lPerDollar(P,w){const v=lpAt(1,P*(1-w),P*(1+w),P).val;return v>0?1/v:0;
 
 /* ============ tabs ============ */
 function showTab(name){
-  const scan=name==="scan";
-  $("view-scan").hidden=!scan; $("view-plan").hidden=scan;
-  $("tab-scan").setAttribute("aria-selected",String(scan));
-  $("tab-plan").setAttribute("aria-selected",String(!scan));
+  if(!["scan","plan","calc"].includes(name)) name="scan";
+  for(const t of ["scan","plan","calc"]){
+    $("view-"+t).hidden = t!==name;
+    $("tab-"+t).setAttribute("aria-selected", String(t===name));
+  }
   save("dnd-tab",name);
   window.scrollTo({top:0});
 }
 $("tab-scan").addEventListener("click",()=>showTab("scan"));
 $("tab-plan").addEventListener("click",()=>showTab("plan"));
+$("tab-calc").addEventListener("click",()=>{ showTab("calc"); if(!hedgeData) loadHedge(); renderCalc(); });
 
 /* ============================================================
    SCAN
    ============================================================ */
-let pools=[], sortKey="netDay", sortDir=-1, openRow=null;
+let pools=[], sortKey="netAllIn", sortDir=-1, openRow=null;
 let seenBefore=LS("orca-seen",{});
 let watch=new Set(LS("orca-watch",[]));
-const filters={profit:false,newOnly:false,watchOnly:false,hideSpike:false};
-const TFLABEL={"5m":"5 minutes","15m":"15 minutes","30m":"30 minutes","1h":"1 hour","2h":"2 hours","4h":"4 hours","8h":"8 hours","24h":"24 hours","7d":"7 days","30d":"30 days"};
-const STABLE=new Set(["USDC","USDT","PYUSD","FDUSD","USDS","DAI","USDG","USDE","CASH","EURC","USD1","SUSD"]);
-
-function volAndAge(series){
-  if(!Array.isArray(series)||!series.length)return{sigma:null,ageDays:null};
-  const slots=series.length, hps=(7*24)/Math.max(1,slots-1);
-  const p=series.map(num).filter(v=>v>0);
-  const ageDays=p.length>=slots?null:Math.max(0.5,((p.length-1)*hps)/24);
-  if(p.length<4)return{sigma:null,ageDays};
-  const r=[];for(let i=1;i<p.length;i++)r.push(Math.log(p[i]/p[i-1]));
-  const m=r.reduce((a,b)=>a+b,0)/r.length;
-  const v=r.reduce((a,b)=>a+(b-m)**2,0)/Math.max(1,r.length-1);
-  return{sigma:Math.sqrt(v)*Math.sqrt(24/hps),ageDays};
-}
-function humanL(rawL,decA,decB){const L=parseFloat(rawL),d=(Number(decA)+Number(decB))/2;
-  return Number.isFinite(L)&&L>0&&Number.isFinite(d)?L/Math.pow(10,d):null;}
-
-const PERIOD_HOURS={"5m":1/12,"15m":0.25,"30m":0.5,"1h":1,"2h":2,"4h":4,"8h":8,"24h":24,"7d":168,"30d":720};
-function sigmaFromChanges(pcObj){
-  if(!pcObj)return null;
-  const est=[];
-  for(const [k,hrs] of [["m5",5/60],["h1",1],["h6",6],["h24",24]]){
-    const d=Math.abs(num(pcObj[k]))/100;
-    if(d>0)est.push((d/0.7979)*Math.sqrt(24/hrs));
-  }
-  if(!est.length)return null;
-  est.sort((a,b)=>a-b);
-  const mid=Math.floor(est.length/2);
-  return est.length%2?est[mid]:(est[mid-1]+est[mid])/2;
-}
-// What one unit of tokenB is worth in dollars, from the pool's own balances.
-function quoteUsd(pool,price){
-  const decA=Number(pool.tokenA?.decimals),decB=Number(pool.tokenB?.decimals);
-  const ba=parseFloat(pool.tokenBalanceA),bb=parseFloat(pool.tokenBalanceB),tvl=num(pool.tvlUsdc);
-  if(![decA,decB,ba,bb].every(Number.isFinite)||!(tvl>0)||!(price>0))return null;
-  const valueInB=(ba/10**decA)*price+(bb/10**decB);
-  if(!(valueInB>0))return null;
-  const q=tvl/valueInB;
-  return Number.isFinite(q)&&q>0?q:null;
-}
-function score(pool,ds,tfKey,holdDays,posUsd){
-  posUsd=Math.max(1,posUsd||1000);
-  const stats=pool.stats||{};
-  const tvl=num(pool.tvlUsdc),price=num(pool.price);
-  const s24=stats["24h"]||{},s7=stats["7d"]||{},s30=stats["30d"]||{};
-  const A=pool.tokenA||{},B=pool.tokenB||{};
-  const sa=STABLE.has((A.symbol||"").toUpperCase()), sb=STABLE.has((B.symbol||"").toUpperCase());
-  const ov=volAndAge(pool.priceHistory7d);
-  const dsSigma=sigmaFromChanges(ds?.priceChange);
-  const sigma=ov.sigma!==null&&ov.ageDays===null?ov.sigma:(ov.sigma??dsSigma);
-  const sigmaSrc=ov.sigma!==null?"orca7d":(dsSigma!==null?"dexscreener":null);
-  const created=ds?.pairCreatedAt?Number(ds.pairCreatedAt):null;
-  const ageDays=created?Math.max(0,(Date.now()-created)/864e5):ov.ageDays;
-
-  const want=stats[tfKey], haveTf=!!(want&&want.fees!==undefined);
-  const useKey=haveTf?tfKey:(stats["24h"]?"24h":"7d");
-  const useHours=PERIOD_HOURS[useKey]??24;
-  const used=stats[useKey]||{};
-  const feesPerDay=num(used.fees)*(24/useHours);
-  const windowVol=num(used.volume);
-
-  const rate=(pool.adaptiveFeeEnabled&&pool.adaptiveFee?.currentRate!=null
-    ?num(pool.adaptiveFee.currentRate):num(pool.feeRate))/1e6;
-
-  const qUsd=sb?1:quoteUsd(pool,price);
-  const L=humanL(pool.liquidity,A.decimals,B.decimals);
-  const feePerL=L?feesPerDay/L:null;
-  const costPerL=(sigma!==null&&price>0&&qUsd)?(sigma*sigma*Math.sqrt(price)/4)*qUsd:null;
-  const yTvl=tvl>0?feesPerDay/tvl:0;
-  const edgeTvl=sigma!==null&&sigma>0?yTvl/((sigma*sigma)/8):null;
-
-  let basis="liquidity";
-  let edge=feePerL!==null&&costPerL?feePerL/costPerL:null;
-  const ratio=edge!==null&&edgeTvl?edge/edgeTvl:null;
-  if(edge===null||!Number.isFinite(edge)||(ratio!==null&&(ratio>100||ratio<0.01))){edge=edgeTvl;basis="tvl";}
-
-  const width=sigma!==null?Math.max(0.08,Math.min(0.85,1.5*sigma*Math.sqrt(holdDays))):null;
-  let earns=null,needs=null,netDay=null,share=null,conc=null;
-  if(width&&price>0&&sigma!==null){
-    const lp=lPerDollar(price,width);
-    if(basis==="liquidity"){
-      needs=costPerL*lp/qUsd;
-      const Lme=(posUsd/qUsd)*lp;
-      share=L&&L>0?Lme/(L+Lme):1;
-      earns=(feesPerDay*share)/posUsd;
-    }else{
-      const k=lp/lPerDollar(price,0.5);
-      needs=((sigma*sigma)/8)*k;
-      share=tvl>0?posUsd/(tvl+posUsd):1;
-      earns=yTvl*k*(tvl>0?tvl/(tvl+posUsd):1);
-    }
-    netDay=earns-needs;
-    conc=yTvl>0?earns/yTvl:null;
-  }
-  const y24=tvl>0?num(s24.fees)/tvl:0, y7=tvl>0?num(s7.fees)/7/tvl:0, y30=tvl>0?num(s30.fees)/30/tvl:0;
-  return {address:pool.address,pair:`${A.symbol||"?"}/${B.symbol||"?"}`,
-    base:sa&&!sb?B.symbol:A.symbol, quote:sa&&!sb?A.symbol:B.symbol,
-    bothVolatile:!sa&&!sb, stablePair:sa&&sb, feeRate:rate*100,
-    adaptiveFee:!!pool.adaptiveFeeEnabled, price,quoteUsd:qUsd,tvl,
-    vol24:num(s24.volume), windowVol, haveTf, usedPeriod:useKey,
-    volOverTvl:tvl>0?num(s24.volume)/tvl:0,
-    yield24:y24,yield7d:y7,yield30d:y30,
-    trend:(y7>0&&y30>0)?y7/y30:null, spike:(y7>0&&y24>3*y7),
-    sigma,sigmaSrc,created,ageDays,
-    poolAvg:yTvl,share,conc,posUsd,
-    edge,edgeTvl,basis,width,earns,needs,netDay,
-    netPer1k:netDay!==null?netDay*1000:null,
-    dsUrl:ds?.url||null, onDs:!!ds};
-}
+const filters={profit:false,newOnly:false,watchOnly:false,hideSpike:false,hidePegged:false};
+const TFLABEL={"blend":"blend of the 24h, 7d and 30d windows","5m":"5 minutes","15m":"15 minutes","30m":"30 minutes","1h":"1 hour","2h":"2 hours","4h":"4 hours","8h":"8 hours","24h":"24 hours","7d":"7 days","30d":"30 days"};
+// Scoring lives in scoring.js (shared with /api/pools) so the browser fallback can never drift from the server.
+const {STABLE,score,thinReasons,extractSolPriceUsd}=window.OrcaScoring;
 
 async function dexscreen(addresses){
   const out=new Map(), chunks=[];
@@ -439,10 +406,13 @@ async function dexscreen(addresses){
 
 async function load(){
   $("status").textContent="Loading…"; $("err").innerHTML=""; $("refresh").disabled=true;
-  const hold=+$("hold").value||30, tf=$("tf").value||"24h", pos=Math.max(1,+$("pos").value||1000);
+  const hold=Math.max(1,Math.min(365,+$("hold").value||30)), tf=$("tf").value||"24h", pos=Math.max(1,+$("pos").value||1000);
+  const tfRaw=parseFloat($("perpTakerFee").value), fnRaw=parseFloat($("perpFundingDaily").value);
+  const perpTakerFee=(Number.isFinite(tfRaw)&&tfRaw>=0?tfRaw:0.05)/100;
+  const perpFundingDaily=(Number.isFinite(fnRaw)?fnRaw:0.01)/100;
   try{
     let data=null;
-    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&pos=${pos}&minTvl=0`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
+    try{ const r=await fetch(`/api/pools?hold=${hold}&tf=${tf}&posUsd=${pos}&perpTakerFee=${perpTakerFee}&perpFundingDaily=${perpFundingDaily}`); if(r.ok){const j=await r.json(); if(!j.error&&Array.isArray(j.pools))data=j;} }catch(e){}
     if(!data){
       const r=await fetch("https://api.orca.so/v2/solana/pools?size=500&stats=5m,15m,30m,1h,2h,4h,8h,24h,7d,30d&sortBy=tvl&sortDirection=desc",{headers:{accept:"application/json"}});
       if(!r.ok) throw new Error("Orca returned "+r.status);
@@ -452,10 +422,13 @@ async function load(){
       $("status").textContent=`Scoring ${raw.length} pools…`;
       let dsMap=new Map();
       try{ dsMap=await dexscreen(raw.map(p=>p.address).filter(Boolean)); }catch(e){}
-      data={pools:raw.map(p=>score(p,dsMap.get(p.address),tf,hold,pos)).filter(p=>!p.stablePair),
+      const solPriceUsd=extractSolPriceUsd(raw,dsMap)||0;
+      data={pools:raw.map(p=>{const s=score(p,dsMap.get(p.address),tf,hold,pos,{perpTakerFee,perpFundingDaily,solPriceUsd});
+              const why=thinReasons(s,p);s.thin=why.length>0;s.thinReason=why.join("; ")||null;return s;}).filter(p=>!p.stablePair&&!p.thin),
             scanned:raw.length,at:Date.now(),direct:true,dexscreenerMatched:dsMap.size};
     }
     pools=data.pools;
+    if(data.solPriceUsd>0) lastSolPriceUsd=data.solPriceUsd;
     const now=Date.now(); let fresh=0;
     pools.forEach(p=>{ if(!seenBefore[p.address]){seenBefore[p.address]=now;fresh++;} p.firstSeen=seenBefore[p.address];
       p.isNew=p.ageDays!=null&&p.ageDays<7; });
@@ -467,7 +440,7 @@ async function load(){
     $("err").innerHTML=`<div class="err">${e.message}. If this isn't running on Vercel, the browser may be blocked from calling Orca directly — the <code>/api/pools</code> function exists to avoid that.</div>`;
     $("status").textContent="Failed";
   }
-  $("refresh").disabled=false; renderScan();
+  $("refresh").disabled=false; renderScan(); populateCalcPools(); renderCalc();
 }
 
 function renderScan(){
@@ -478,14 +451,16 @@ function renderScan(){
     if(p.tvl<minTvl) return false;
     if(kind==="stable"&&p.bothVolatile) return false;
     if(q&&!p.pair.toUpperCase().includes(q)) return false;
-    if(filters.profit&&!(p.netDay>0)) return false;
+    if(filters.profit&&!(p.netAllIn>0)) return false;
     if(filters.newOnly&&!(p.isNew||p.firstSeen>recentMs)) return false;
     if(filters.watchOnly&&!watch.has(p.address)) return false;
     if(filters.hideSpike&&p.spike) return false;
+    if(filters.hidePegged&&p.pegged) return false;
     return true;
   });
   const val=p=>{if(sortKey==="pair")return p.pair;
     if(sortKey==="ageDays")return p.ageDays==null?999:p.ageDays;
+    if(sortKey==="minPosUsd")return p.minPosUsd==null?(sortDir===1?1e12:-1e9):p.minPosUsd;
     const v=p[sortKey];return v==null?-1e9:v;};
   rows.sort((a,b)=>{const x=val(a),y=val(b);
     if(sortKey==="ageDays")return (x-y)*(sortDir===-1?1:-1);
@@ -495,48 +470,77 @@ function renderScan(){
     if(th.dataset.k===sortKey) th.setAttribute("aria-sort",sortDir===-1?"descending":"ascending");
     else th.removeAttribute("aria-sort");});
 
-  const prof=pools.filter(p=>p.netDay>0).length, nw=pools.filter(p=>p.isNew||p.firstSeen>recentMs).length;
+  const prof=pools.filter(p=>p.netAllIn>0).length, nw=pools.filter(p=>p.isNew||p.firstSeen>recentMs).length;
   $("counts").textContent=`${rows.length} shown · ${prof} profitable · ${nw} new · ${watch.size} watched`;
 
   $("rows").innerHTML=rows.map(p=>{
-    const e=p.edge, ec=e==null?"":e>=1.5?"gain":e>=1?"e-mid":"loss";
+    const e=p.edgeNet, ec=e==null?"":e>=1.5?"gain":e>=1?"e-mid":"loss";
     const fresh=p.isNew||p.firstSeen>recentMs;
+    const minCls=p.minPosUsd==null?"loss":(p.posUsd>=p.minPosUsd?"gain":"e-mid");
+    const minTxt=p.minPosUsd==null?"Never":p.minPosUsd>=1000?usdShort(p.minPosUsd):"$"+Math.round(p.minPosUsd);
     return `<tr data-a="${p.address}" class="${openRow===p.address?"open ":""}${fresh?"isnew":""}">
-      <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.ageDays!=null&&p.ageDays<7?`<span class="tag new">${ageTxt(p.ageDays)} old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.haveTf?"":'<span class="tag warn">24h data</span>'}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}${links(p)}</td>
-      <td class="mono ${p.netDay>0?"gain":"loss"}"><b>${pc(p.netDay)}</b></td>
+      <td><span class="star ${watch.has(p.address)?"on":""}" data-star="${p.address}">${watch.has(p.address)?"★":"☆"}</span><span class="pairname">${p.pair}</span><span class="tier">${p.feeRate.toFixed(2)}%</span>${p.ageDays!=null&&p.ageDays<7?`<span class="tag new">${ageTxt(p.ageDays)} old</span>`:fresh?'<span class="tag new">new to you</span>':""}${p.spike?'<span class="tag warn">fee spike</span>':""}${p.haveTf?"":'<span class="tag warn">24h data</span>'}${p.bothVolatile?'<span class="tag">2 shorts</span>':""}${p.pegged?'<span class="tag warn" title="Barely moves: depeg risk is not modeled">pegged</span>':""}${links(p)}</td>
+      <td class="mono ${p.netAllIn>0?"gain":"loss"}"><b>${pc(p.netAllIn)}</b></td>
       <td class="mono">${pc(p.poolAvg)}</td>
       <td class="mono">${pc(p.earns)}${p.share>0.2?`<span class="tag warn">${(p.share*100).toFixed(0)}% of pool</span>`:""}</td>
       <td class="mono">${pc(p.needs)}</td>
+      <td class="mono">${pc(p.friction)}</td>
       <td class="mono ${ec}">${e==null?"—":e.toFixed(2)+"×"}</td>
       <td class="mono">${p.sigma==null?"—":pc(p.sigma,1)}</td>
       <td class="mono">${p.width?"±"+(p.width*100).toFixed(0)+"%":"—"}</td>
+      <td class="mono ${minCls}" title="${p.minPosReason||""}">${minTxt}</td>
       <td class="mono">${usdShort(p.tvl)}</td>
       <td class="mono">${usdShort(p.vol24)}</td>
       <td class="mono">${ageTxt(p.ageDays)}</td>
     </tr>${openRow===p.address?detail(p):""}`;}).join("")
-    || `<tr><td colspan="11" class="status" style="padding:16px">Nothing matches. Clear a filter or lower the minimum TVL.</td></tr>`;
+    || `<tr><td colspan="13" class="status" style="padding:16px">Nothing matches. Clear a filter or lower the minimum TVL.</td></tr>`;
+}
+
+function fmtPoolPx(v,p){
+  if(v==null)return "—";
+  return p.quoteUsd&&Math.abs(p.quoteUsd-1)<0.02?px(v):(+v).toPrecision(5)+" "+p.quote;
 }
 
 function detail(p){
-  const v = p.netDay==null?["","Not enough data to judge this pool yet."]
-    : p.netDay<=0?["loss",`Skip it. ${p.base} moves more than the pool pays for.`]
-    : p.edge>=1.5?["gain",`Worth opening. A $1,000 position would clear about $${p.netPer1k.toFixed(2)} a day at ±${(p.width*100).toFixed(0)}%, with fees ${p.edge.toFixed(1)}× the movement cost.`]
-    : ["e-mid",`Thin margin. It clears about $${p.netPer1k.toFixed(2)} a day per $1,000, but fees are only ${p.edge.toFixed(2)}× the movement cost — a quiet week turns this negative.`];
+  const v = p.netAllIn==null?["","Not enough data to judge this pool yet."]
+    : p.netAllIn<=0?["loss",p.netDay>0
+        ? `Skip it. The fees beat ${p.base}'s movement cost, but not the trading costs on top (swaps, perp fees, funding, rebalances): about $${(-p.netAllInPer1k).toFixed(2)} a day lost per $1,000.`
+        : `Skip it. ${p.base} moves more than the pool pays for.`]
+    : p.edgeNet>=1.5?["gain",`Worth opening. A $1,000 position would clear about $${p.netAllInPer1k.toFixed(2)} a day after all costs at ±${(p.width*100).toFixed(0)}%, with fees ${p.edgeNet.toFixed(1)}× the movement and trading costs.`]
+    : ["e-mid",`Thin margin. It clears about $${p.netAllInPer1k.toFixed(2)} a day per $1,000 after costs, but fees are only ${p.edgeNet.toFixed(2)}× what movement and trading cost — a quiet week turns this negative.`];
   const trend=p.trend==null?"no 30-day history":p.trend>1.3?`fees up ${p.trend.toFixed(1)}× on the 30-day average`:p.trend<0.75?`fees down to ${p.trend.toFixed(2)}× the 30-day average`:"fees steady against the 30-day average";
-  return `<tr class="detail"><td colspan="11">
+  const c=p.costs;
+  const profRows=[["conservador","Conservador"],["moderado","Moderado"],["agressivo","Agressivo"]].map(([key,label])=>{
+    const pr=p.profiles?.[key]; if(!pr)return "";
+    const minStr=pr.minPosUsd==null?`<span class="loss" title="${pr.minPosReason||""}">Never</span>`:usd(pr.minPosUsd);
+    return `<tr>
+      <td><b>${label}</b> <span class="tier">${pr.k.toFixed(1)}×</span></td>
+      <td class="mono">${fmtPoolPx(pr.lower,p)} – ${fmtPoolPx(pr.upper,p)}</td>
+      <td class="mono">±${pr.widthPct!=null?pr.widthPct.toFixed(1)+"%":"—"}</td>
+      <td class="mono">${pr.expectedRebalances!=null?pr.expectedRebalances.toFixed(2)+"×":"—"}</td>
+      <td class="mono ${pr.netAllIn>0?"gain":"loss"}">${pr.netAllInPer1k!=null?"$"+pr.netAllInPer1k.toFixed(2):"—"}</td>
+      <td class="mono">${minStr}</td>
+    </tr>`;
+  }).join("");
+  return `<tr class="detail"><td colspan="13">
     <p class="verdict ${v[0]}"><b>${v[1]}</b></p>
     <div class="dgrid">
-      <div class="dcell"><div class="v mono">${p.quoteUsd&&Math.abs(p.quoteUsd-1)<0.02?px(p.price):(+p.price).toPrecision(6)+" "+p.quote}</div><div class="k">${p.base} price in ${p.quote}</div></div>
+      <div class="dcell"><div class="v mono">${fmtPoolPx(p.price,p)}</div><div class="k">${p.base} price in ${p.quote}</div></div>
       <div class="dcell"><div class="v mono">±${p.width?(p.width*100).toFixed(0):"—"}%</div><div class="k">Suggested range</div></div>
       <div class="dcell"><div class="v mono">${pc(p.poolAvg)}</div><div class="k">Pool average / day (Orca's Yield/TVL)</div></div>
       <div class="dcell"><div class="v mono gain">${pc(p.earns)}</div><div class="k">Your yield / day on $${(p.posUsd||1000).toLocaleString()}</div></div>
-      <div class="dcell"><div class="v mono">${pc(p.needs)}</div><div class="k">Break-even / day</div></div>
-      <div class="dcell"><div class="v mono">${p.netPer1k!=null?"$"+p.netPer1k.toFixed(2):"—"}</div><div class="k">Net / day per $1,000</div></div>
-      <div class="dcell"><div class="v mono">${p.bothVolatile?"Short both":"Short "+p.base}</div><div class="k">Hedge needed</div></div>
+      <div class="dcell"><div class="v mono">${pc(p.needs)}</div><div class="k">Movement cost (LVR) / day</div></div>
+      <div class="dcell"><div class="v mono">${pc(p.friction)}</div><div class="k">Trading costs / day (amortised)</div></div>
+      <div class="dcell"><div class="v mono ${p.netAllIn>0?"gain":"loss"}">${p.netAllInPer1k!=null?"$"+p.netAllInPer1k.toFixed(2):"—"}</div><div class="k">Net / day per $1,000 (after costs)</div></div>
+      <div class="dcell"><div class="v mono ${p.minPosUsd==null?"loss":p.posUsd>=p.minPosUsd?"gain":"e-mid"}">${p.minPosUsd!=null?usd(p.minPosUsd):"Never"}</div><div class="k">Min position (breakeven)</div></div>
+      <div class="dcell"><div class="v mono">${p.breakevenDays!=null?p.breakevenDays.toFixed(1)+"d":"Never"}</div><div class="k">Est. breakeven days</div></div>
+      <div class="dcell"><div class="v mono">${p.bothVolatile?"Short both":"Short "+p.base}${p.hedgeRatioUsed!=null?` · ${(p.hedgeRatioUsed*100).toFixed(0)}%`:""}</div><div class="k">Hedge needed (of position value)</div></div>
     </div>
+    ${c?`<p class="status" style="margin:2px 0 8px"><b>Cost breakdown (${Math.max(1,+$("hold").value||30)}d @ $${(p.posUsd||1000).toLocaleString()}):</b> total <b>${usd(c.totalUsd)}</b> — LP fixed ${usd(c.lpFixedUsd)} · swap ${usd(c.swapUsd)} · perp fees ${usd(c.hedgeUsd)} · funding ${usd(c.fundingUsd)} · est. rebalances <b>${c.rebalances.toFixed(2)}×</b>.${p.minPosReason?` <span class="loss">(${p.minPosReason})</span>`:""}</p>`:""}
+    ${profRows?`<table class="ptable"><thead><tr><th>Profile</th><th>Price range (lower – upper)</th><th>Width</th><th>Rebalances</th><th>Net / $1k / day (after costs)</th><th>Min USD</th></tr></thead><tbody>${profRows}</tbody></table>`:""}
     <p style="margin:0 0 8px">${p.width&&p.earns!=null?`<button class="primary" data-plan="${p.address}">Plan this pool →</button>`:""}</p>
-    <p class="status">Fees from Orca's own <b>${TFLABEL[p.usedPeriod]||p.usedPeriod}</b> figures${p.haveTf?"":` (the ${TFLABEL[$("tf").value]||"chosen"} window wasn't returned for this pool)`}. Volatility from ${p.sigmaSrc==="orca7d"?"Orca's 7-day price history":p.sigmaSrc==="dexscreener"?"DexScreener's price changes":"no source"}. Scored on ${p.basis==="liquidity"?"the pool's active liquidity":"TVL, because the liquidity figure looked unreliable"}. A $${(p.posUsd||1000).toLocaleString()} position would be <b>${p.share!=null?(p.share*100).toFixed(1):"?"}%</b> of the active liquidity, earning <b>${p.conc!=null?p.conc.toFixed(2):"?"}x</b> the pool average — a narrower range lifts that, and your own deposit dilutes it.${p.quoteUsd&&Math.abs(p.quoteUsd-1)>0.01?` Priced in ${p.quote} at $${p.quoteUsd.toFixed(4)}.`:""} Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}</p>
-    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}</p>
+    <p class="status">Fees from Orca's own <b>${TFLABEL[p.usedPeriod]||p.usedPeriod}</b> figures${p.haveTf?"":` (the ${TFLABEL[$("tf").value]||"chosen"} window wasn't returned for this pool)`}. Volatility from ${p.sigmaSrc==="orca7d"?"Orca's 7-day price history":p.sigmaSrc==="dexscreener"?"DexScreener's price changes":"no source"}. Scored on ${p.basis==="liquidity"?"the pool's active liquidity":"TVL, because the liquidity figure looked unreliable"}${p.concentration!=null?` (its liquidity is ${p.concentration<10?p.concentration.toFixed(1):Math.round(p.concentration).toLocaleString()}× what TVL would give a full-range pool; pool-level edge ${p.edge!=null?p.edge.toFixed(2):"?"}×, ${p.edgeNet!=null?p.edgeNet.toFixed(2):"?"}× after your trading costs)`:""}.${p.pegged?` <b class="e-mid">Pegged pair: it barely moves, so the movement cost is near zero and a depeg is the real risk, which this model does not price. Hedging may not apply.</b>`:""} A $${(p.posUsd||1000).toLocaleString()} position would be <b>${p.share!=null?(p.share*100).toFixed(1):"?"}%</b> of the active liquidity, earning <b>${p.conc!=null?p.conc.toFixed(2):"?"}x</b> the pool average — a narrower range lifts that, and your own deposit dilutes it.${p.quoteUsd&&Math.abs(p.quoteUsd-1)>0.01?` Priced in ${p.quote} at $${p.quoteUsd.toFixed(4)}.`:""} Fee trend: ${trend}. 24h ${pc(p.yield24)}/day · 7d ${pc(p.yield7d)}/day · 30d ${pc(p.yield30d)}/day.${p.adaptiveFee?" Adaptive fees, so the yield moves with volatility.":""}</p>
+    <p class="status">Pool <span class="mono">${p.address.slice(0,6)}…${p.address.slice(-4)}</span>${p.created?` · created ${new Date(p.created).toLocaleString()}`:""} · first seen ${new Date(p.firstSeen).toLocaleDateString()}. <i>Estimates only — not a guarantee of future returns.</i></p>
   </td></tr>`;
 }
 
@@ -557,10 +561,10 @@ function planPool(p){
 
 document.querySelectorAll("#view-scan th[data-k]").forEach(th=>th.addEventListener("click",()=>{
   const k=th.dataset.k;
-  if(sortKey===k)sortDir=-sortDir; else{sortKey=k;sortDir=k==="pair"?1:-1;}
+  if(sortKey===k)sortDir=-sortDir; else{sortKey=k;sortDir=(k==="pair"||k==="minPosUsd")?1:-1;}
   if([...$("rank").options].some(o=>o.value===k)) $("rank").value=k;
   renderScan();}));
-$("rank").addEventListener("change",()=>{sortKey=$("rank").value;sortDir=-1;renderScan();});
+$("rank").addEventListener("change",()=>{sortKey=$("rank").value;sortDir=sortKey==="minPosUsd"?1:-1;renderScan();});
 $("rows").addEventListener("click",e=>{
   const pl=e.target.dataset.plan;
   if(pl){const p=pools.find(x=>x.address===pl); if(p)planPool(p); return;}
@@ -568,12 +572,14 @@ $("rows").addEventListener("click",e=>{
   if(st){ watch.has(st)?watch.delete(st):watch.add(st); save("orca-watch",[...watch]); renderScan(); return; }
   const tr=e.target.closest("tr[data-a]"); if(!tr)return;
   openRow=openRow===tr.dataset.a?null:tr.dataset.a; renderScan();});
-[["cProfit","profit"],["cNew","newOnly"],["cWatch","watchOnly"],["cSpike","hideSpike"]].forEach(([id,key])=>{
+[["cProfit","profit"],["cNew","newOnly"],["cWatch","watchOnly"],["cSpike","hideSpike"],["cPeg","hidePegged"]].forEach(([id,key])=>{
   $(id).addEventListener("click",()=>{filters[key]=!filters[key];
     $(id).setAttribute("aria-pressed",String(filters[key])); renderScan();});});
 ["q","minTvl","kind"].forEach(id=>$(id).addEventListener("input",renderScan));
 $("hold").addEventListener("change",load);
 $("pos").addEventListener("change",load);
+$("perpTakerFee").addEventListener("change",load);
+$("perpFundingDaily").addEventListener("change",load);
 $("tf").addEventListener("change",load);
 $("refresh").addEventListener("click",load);
 
@@ -682,10 +688,174 @@ function run(){
 }
 document.querySelectorAll("#view-plan input,#view-plan select").forEach(el=>el.addEventListener("input",run));
 
+/* ============================================================
+   CALCULADORA & HEDGE AO VIVO
+   ============================================================ */
+let hedgeData=null, lastSolPriceUsd=0;
+
+function pickDefaultSolUsdc(list){
+  const solUsdc=list.filter(p=>p.pair==="SOL/USDC").sort((a,b)=>b.tvl-a.tvl);
+  if(solUsdc.length) return solUsdc[0];
+  return [...list].sort((a,b)=>b.tvl-a.tvl)[0]||null;
+}
+
+function populateCalcPools(){
+  const sel=$("calc-pool"), prev=sel.value;
+  if(!pools.length){ sel.innerHTML='<option value="">Carregando pools…</option>'; return; }
+  const sorted=[...pools].sort((a,b)=>b.tvl-a.tvl);
+  sel.innerHTML=sorted.map(p=>`<option value="${p.address}">${p.pair} (${p.feeRate.toFixed(2)}% · TVL ${usdShort(p.tvl)})</option>`).join("");
+  if(prev && sorted.some(p=>p.address===prev)) sel.value=prev;
+  else {
+    const def=pickDefaultSolUsdc(sorted);
+    if(def) sel.value=def.address;
+  }
+}
+
+function populateCalcVenues(){
+  const sel=$("calc-venue"), prev=sel.value;
+  const venues=hedgeData?.venues||[];
+  if(!venues.length){ sel.innerHTML='<option value="">Carregando venues…</option>'; return; }
+  sel.innerHTML=venues.map(v=>{
+    const tags=[];
+    if(v.cheapest) tags.push("mais barato");
+    if(v.beta) tags.push("beta");
+    if(!v.ok) tags.push("erro");
+    return `<option value="${v.id}">${v.name}${tags.length?" ["+tags.join(", ")+"]":""}</option>`;
+  }).join("");
+  if(prev && venues.some(v=>v.id===prev)) sel.value=prev;
+  else if(hedgeData?.cheapest) sel.value=hedgeData.cheapest;
+  else {
+    const firstOk=venues.find(v=>v.ok);
+    if(firstOk) sel.value=firstOk.id;
+  }
+}
+
+async function loadHedge(){
+  const n=Math.max(1,+$("hedge-notional").value||10);
+  const d=Math.max(1,+$("hedge-days").value||7);
+  $("hedge-refresh").disabled=true;
+  $("hedge-meta").textContent="Consultando Jupiter, Pacifica e Drift/Velocity ao vivo…";
+  try{
+    const r=await fetch(`/api/hedge?notional=${encodeURIComponent(n)}&days=${encodeURIComponent(d)}`);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    hedgeData=await r.json();
+    const vel=hedgeData.venues?.find(v=>v.id==="velocity"&&v.solPriceUsd>0);
+    if(vel && !(lastSolPriceUsd>0)) lastSolPriceUsd=vel.solPriceUsd;
+    populateCalcVenues();
+    renderHedgeTable();
+    renderCalc();
+  }catch(e){
+    $("hedge-meta").innerHTML=`<span class="loss">Falha ao consultar /api/hedge: ${e.message}</span>`;
+  }
+  $("hedge-refresh").disabled=false;
+}
+
+function renderHedgeTable(){
+  if(!hedgeData||!Array.isArray(hedgeData.venues)) return;
+  const vs=hedgeData.venues;
+  $("hedge-meta").innerHTML=`Consulta ao vivo: <span class="mono">${hedgeData.queriedAt}</span> · Notional <b>${usd(hedgeData.notional)}</b> · Horizonte <b>${hedgeData.days}d</b>${hedgeData.cheapest?` · Mais barato (válido): <b class="gain">${vs.find(v=>v.id===hedgeData.cheapest)?.name||hedgeData.cheapest}</b>`:""}`;
+  $("hedge-table").innerHTML=`<thead><tr>
+    <th>Venue</th><th>Taker + impacto (/lado)</th><th>Carregamento (/h)</th><th>Custo trade</th><th>Carregamento (${hedgeData.days}d)</th><th>Total</th><th>Total %</th><th>Mínimo</th><th>Avisos &amp; fontes</th>
+  </tr></thead><tbody>`+vs.map(v=>{
+    if(!v.ok){
+      return `<tr>
+        <td><b>${v.name}</b>${v.beta?' <span class="tag warn">beta</span>':""}</td>
+        <td colspan="7" class="loss" style="text-align:left">Erro: ${v.error}</td>
+        <td style="text-align:left"><a href="${v.sources?.api||"#"}" target="_blank" rel="noopener noreferrer">API</a></td>
+      </tr>`;
+    }
+    const carryHourly = v.id==="jupiter"
+      ? `+${(v.borrowHourly*100).toFixed(4)}%/h (borrow)`
+      : `${(v.fundingHourly*100)>=0?"+":""}${(v.fundingHourly*100).toFixed(5)}%/h (short ${v.fundingHourly>=0?"recebe":"paga"})`;
+    const srcs=Object.entries(v.sources||{}).map(([k,u])=>`<a href="${u}" target="_blank" rel="noopener noreferrer">${k}</a>`).join(" · ");
+    const avisosHtml=(v.avisos||[]).map(a=>`<span class="tag warn" style="margin-left:0;margin-right:4px">${a}</span>`).join("");
+    return `<tr class="${v.cheapest?"cheapest":""}">
+      <td><b>${v.name}</b>${v.cheapest?' <span class="tag ok">CHEAPEST</span>':""}${v.beta?' <span class="tag warn">beta</span>':""}</td>
+      <td class="mono">${((v.takerRate+(v.impactRate||0))*100).toFixed(3)}%</td>
+      <td class="mono">${carryHourly}</td>
+      <td class="mono">${usd(v.custoTrade,4)}</td>
+      <td class="mono ${v.carregamento<=0?"gain":"loss"}">${usd(v.carregamento,4)}</td>
+      <td class="mono ${v.total<=0?"gain":"loss"}"><b>${usd(v.total,4)}</b></td>
+      <td class="mono ${v.total<=0?"gain":"loss"}">${v.totalPct.toFixed(4)}%</td>
+      <td class="mono ${v.minimoOk?"gain":"loss"}">${v.minimoOk?"OK":"Abaixo"} <small class="status">(${v.minOrderLabel||""})</small></td>
+      <td style="text-align:left;white-space:normal;min-width:220px">${avisosHtml}<div class="status" style="margin-top:2px">${srcs}</div></td>
+    </tr>`;
+  }).join("")+"</tbody>";
+}
+
+function renderCalc(){
+  const poolAddr=$("calc-pool").value;
+  const pool=pools.find(p=>p.address===poolAddr)||pickDefaultSolUsdc(pools);
+  const venueId=$("calc-venue").value||hedgeData?.cheapest;
+  const venue=hedgeData?.venues?.find(v=>v.id===venueId)||hedgeData?.venues?.find(v=>v.ok)||null;
+  const budgetUsd=Math.max(0,+$("calc-budget").value||0);
+  const profile=$("calc-profile").value||"moderado";
+  const levInput=Math.max(1,+$("calc-lev").value||2);
+  const marginBufferPct=Math.max(0,+$("calc-buf").value||0)/100;
+  const days=Math.max(1,Math.round(+$("calc-days").value||7));
+
+  if(!pool){
+    $("calc-status").textContent="Aguardando pools da Orca…";
+    $("calc-kpis").innerHTML=""; $("calc-breakdown").innerHTML="";
+    return;
+  }
+  const solPx = lastSolPriceUsd > 0 ? lastSolPriceUsd : (venue?.solPriceUsd > 0 ? venue.solPriceUsd : ((pool.base||"").toUpperCase()==="SOL" ? pool.price*(pool.quoteUsd||1) : 0));
+  const res=window.OrcaCalc.solveBudget({
+    budgetUsd, pool, venue, profile, leverage: levInput, days, marginBufferPct, solPriceUsd: solPx
+  });
+
+  const vLimits=venue?`Limites do venue: ${venue.minLeverage||1}x–${venue.maxLeverage||20}x${res.leverageClamped?` (alavancagem ajustada para ${res.effectiveLeverage}x)`:""}`:"Sem venue carregado (usando 2x sem custo perp)";
+  $("calc-status").innerHTML=`Pool selecionado: <b>${pool.pair}</b> (${pool.feeRate.toFixed(2)}% · TVL ${usdShort(pool.tvl)}) · SOL ref: <b class="mono">${solPx>0?usd(solPx):"—"}</b> · ${vLimits}`;
+
+  const netCls = res.netProfitUsd==null ? "" : res.netProfitUsd>=0 ? "gain" : "loss";
+  const baseSym = pool.base || "SOL", quoteSym = pool.quote || "USDC";
+  const lpSplitTxt = res.lpBaseAmount!=null ? `≈ ${tok(res.lpBaseAmount)} ${baseSym} + ${tok(res.lpQuoteAmount)} ${quoteSym}` : "";
+  $("calc-kpis").innerHTML=[
+    ["LP máximo (P)", usd(res.lpUsd), "", lpSplitTxt],
+    ["Colateral no venue", usd(res.collateralTotalUsd), "", `${usd(res.collateralBaseUsd)} margem + ${usd(res.marginBufferUsd)} buffer`],
+    ["Reserva SOL", usd(res.solReserveUsd), "", `${res.solReserveSol} SOL p/ taxas e rent`],
+    ["Custos de entrada", usd(res.entryCostsUsd), "", `swap + perp open + tx`],
+    ["Mínimos", (res.venueMinOk&&res.poolMinOk)?"OK":"Abaixo", (res.venueMinOk&&res.poolMinOk)?"gain":"loss", `Venue: ${res.venueMinOk?"OK":"Não"} · Pool mín: ${res.minPosUsd!=null?usd(res.minPosUsd):"Nunca"}`],
+    [`Lucro líq. (${days}d)`, res.netProfitUsd!=null?usd(res.netProfitUsd):"—", netCls, res.netProfitPctBudget!=null?`${res.netProfitPctBudget.toFixed(2)}% s/ B`:""]
+  ].map(([k,v,c,sub])=>`<div class="kpi"><div class="v mono ${c}">${v}</div><div class="k">${k}</div>${sub?`<div class="status">${sub}</div>`:""}</div>`).join("");
+
+  const denom=Math.max(budgetUsd, res.totalAllocatedUsd, 1e-9);
+  $("calc-splitbar").innerHTML=`<i class="a" style="width:${res.lpUsd/denom*100}%"></i><i class="b" style="width:${res.collateralTotalUsd/denom*100}%"></i><i class="c" style="width:${res.solReserveUsd/denom*100}%"></i><i class="d" style="width:${res.entryCostsUsd/denom*100}%"></i>`;
+  $("calc-legend").innerHTML=`<span><b style="background:var(--lp)"></b>LP ${usd(res.lpUsd)}</span><span><b style="background:var(--loss)"></b>Colateral ${usd(res.collateralTotalUsd)}</span><span><b style="background:var(--accent)"></b>Reserva SOL ${usd(res.solReserveUsd)}</span><span><b style="background:var(--mute)"></b>Entrada ${usd(res.entryCostsUsd)}</span><span><b>Total alocado: ${usd(res.totalAllocatedUsd)} / ${usd(budgetUsd)}</b></span>`;
+
+  const alerts=[];
+  if(!res.venueMinOk) alerts.push(`Não atende ao mínimo do venue (${venue?venue.name:"nenhum"}).`);
+  if(!res.poolMinOk) alerts.push(`Abaixo do mínimo de breakeven do pool (${res.minPosUsd!=null?usd(res.minPosUsd):"nunca empata"}).`);
+  for(const w of res.warnings) if(!alerts.includes(w)) alerts.push(w);
+  $("calc-alerts").innerHTML = alerts.length
+    ? `<p class="band ${(!res.feasible)?"bad":""}">${alerts.map(a=>`• ${a}`).join("<br>")}</p>`
+    : `<p class="band">Orçamento compatível com os mínimos do venue e do pool no horizonte de ${days} dias.</p>`;
+
+  const rng=res.range;
+  const hc=res.horizonCosts;
+  $("calc-breakdown").innerHTML=`<thead><tr><th>Item</th><th>Valor</th><th>Detalhe</th></tr></thead><tbody>
+    <tr><td>Posição LP (P)</td><td class="mono"><b>${usd(res.lpUsd)}</b></td><td>${lpSplitTxt} (hedge short notional ${usd(res.hedgeNotionalUsd)})</td></tr>
+    <tr><td>Colateral no venue (${res.effectiveLeverage}x + ${(marginBufferPct*100).toFixed(0)}% buffer)</td><td class="mono">${usd(res.collateralTotalUsd)}</td><td>Base ${usd(res.collateralBaseUsd)} + buffer ${usd(res.marginBufferUsd)}</td></tr>
+    <tr><td>Reserva de SOL</td><td class="mono">${usd(res.solReserveUsd)}</td><td>${res.solReserveSol} SOL a ${usd(res.solPriceUsd)}/SOL</td></tr>
+    <tr><td>Custos de entrada</td><td class="mono">${usd(res.entryCostsUsd)}</td><td>Swap ${usd(res.swapEntryUsd)} + perp open ${usd(res.perpOpenUsd)} + tx ${usd(res.txEntryUsd)}</td></tr>
+    <tr><td><b>Soma alocada (≤ B)</b></td><td class="mono"><b>${usd(res.totalAllocatedUsd)}</b></td><td>Orçamento B = ${usd(budgetUsd)} (sobra ${usd(res.remainingUsd)})</td></tr>
+    <tr><td>Faixa sugerida (${profile})</td><td class="mono">${rng.widthPct!=null?"±"+rng.widthPct.toFixed(1)+"%":"—"}</td><td>${rng.lower!=null?`${fmtPoolPx(rng.lower,pool)} – ${fmtPoolPx(rng.upper,pool)}`:"—"} · ~${rng.expectedRebalances.toFixed(2)}× rebalances em ${days}d</td></tr>
+    <tr><td>Rendimento bruto LP − IL/LVR (${days}d)</td><td class="mono ${res.lpNetBeforeCostsUsd>=0?"gain":"loss"}">${res.lpNetBeforeCostsUsd!=null?usd(res.lpNetBeforeCostsUsd):"—"}</td><td>Fees ${res.lpGrossYieldUsd!=null?usd(res.lpGrossYieldUsd):"—"} − IL/LVR ${res.lpIlCostUsd!=null?usd(res.lpIlCostUsd):"—"}</td></tr>
+    <tr><td>Custos totais no horizonte (${days}d)</td><td class="mono">${usd(hc.totalUsd)}</td><td>LP tx ${usd(hc.lpFixedUsd)} + swap/reb ${usd(hc.swapUsd)} + perp trade ${usd(hc.perpTradeUsd)} + ${hc.perpCarryUsd<=0?"funding recebido":"funding/borrow"} ${usd(hc.perpCarryUsd)}</td></tr>
+    <tr><td><b>Lucro líquido estimado (${days}d)</b></td><td class="mono ${netCls}"><b>${res.netProfitUsd!=null?usd(res.netProfitUsd):"—"}</b></td><td>${res.netProfitPctBudget!=null?`${res.netProfitPctBudget.toFixed(2)}% sobre B (${res.netProfitPctLp.toFixed(2)}% sobre P)`:""} · minPosUsd = ${res.minPosUsd!=null?usd(res.minPosUsd):"Nunca"}</td></tr>
+  </tbody>`;
+}
+
+document.querySelectorAll("#calc-budget,#calc-pool,#calc-profile,#calc-venue,#calc-lev,#calc-buf,#calc-days").forEach(el=>el.addEventListener("input",renderCalc));
+$("calc-pool").addEventListener("change",renderCalc);
+$("calc-venue").addEventListener("change",renderCalc);
+$("hedge-refresh").addEventListener("click",loadHedge);
+
 /* ============ boot ============ */
 showTab(LS("dnd-tab","scan"));
 run();
 load();
+loadHedge();
 </script>
 </body>
 </html>
